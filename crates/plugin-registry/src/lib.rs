@@ -97,6 +97,10 @@ impl PluginRegistry {
         Ok(())
     }
 
+    pub fn has_plugin(&self, plugin_id: &str) -> bool {
+        self.plugins.contains_key(plugin_id)
+    }
+
     pub fn can_publish(&self, plugin_id: &str, topic: &str) -> bool {
         self.plugins
             .get(plugin_id)

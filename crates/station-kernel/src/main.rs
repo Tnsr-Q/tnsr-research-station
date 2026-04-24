@@ -4,6 +4,7 @@ use bridge_browser::to_browser_frame;
 use bridge_gpui::to_gpui_overlay_line;
 use plugin_registry::{PluginKind, PluginManifest, PluginRegistry, TransportKind};
 use runtime_core::EventBus;
+use station_policy::PolicyEngine;
 use station_replay::JsonlReplayLog;
 use station_schema::{PayloadSchema, SchemaRegistry};
 use station_supervisor::{PluginRuntimeState, StationSupervisor};
@@ -67,12 +68,16 @@ fn main() {
     let rx = bus.subscribe();
 
     let mut event = quantum_state_event(supervisor.session.run_id.clone());
-    assert!(registry.can_publish(&event.source, &event.topic));
+    let policy = PolicyEngine {
+        plugins: &registry,
+        schemas: &schemas,
+        supervisor: &supervisor,
+    };
 
-    schemas
-        .attach_schema_hash(&mut event)
-        .expect("attach schema hash");
-    schemas.validate(&event).expect("validate event schema");
+    policy
+        .admit_event(&mut event)
+        .expect("event admission")
+        .assert_allowed();
 
     let mut ledger = ArtifactLedger::default();
     let payload_bytes = serde_json::to_vec(&event.payload).expect("serialize payload");
