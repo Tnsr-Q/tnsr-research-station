@@ -375,8 +375,70 @@ dependencies = [
  "bridge_gpui",
  "plugin_registry",
  "runtime_core",
+ "serde_json",
+ "station_policy",
+ "station_replay",
+ "station_run",
+ "station_schema",
+ "station_supervisor",
  "station_telemetry",
  "tracing",
+]
+
+[[package]]
+name = "station_policy"
+version = "0.1.0"
+dependencies = [
+ "plugin_registry",
+ "runtime_core",
+ "serde_json",
+ "station_schema",
+ "station_supervisor",
+ "thiserror",
+]
+
+[[package]]
+name = "station_replay"
+version = "0.1.0"
+dependencies = [
+ "runtime_core",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "ulid",
+]
+
+[[package]]
+name = "station_run"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+ "ulid",
+]
+
+[[package]]
+name = "station_schema"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "runtime_core",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "station_supervisor"
+version = "0.1.0"
+dependencies = [
+ "plugin_registry",
+ "runtime_core",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
@@ -396,6 +458,26 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "thiserror"
+version = "1.0.69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
+dependencies = [
+ "thiserror-impl",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "1.0.69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

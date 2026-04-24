@@ -83,6 +83,10 @@ impl ArtifactLedger {
     pub fn records(&self) -> &[ArtifactRecord] {
         &self.records
     }
+
+    pub fn artifact_count(&self) -> usize {
+        self.records.len()
+    }
 }
 
 #[cfg(test)]

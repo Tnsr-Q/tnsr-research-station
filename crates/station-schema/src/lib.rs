@@ -114,6 +114,14 @@ impl SchemaRegistry {
 
         Ok(())
     }
+
+    pub fn schema_count(&self) -> usize {
+        self.by_topic.len()
+    }
+
+    pub fn schemas(&self) -> Vec<&PayloadSchema> {
+        self.by_topic.values().collect()
+    }
 }
 
 fn has_field(payload: &Value, field: &str) -> bool {
