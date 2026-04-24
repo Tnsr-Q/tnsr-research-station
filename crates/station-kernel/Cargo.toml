@@ -13,5 +13,6 @@ plugin_registry = { path = "../plugin-registry" }
 runtime_core = { path = "../runtime-core" }
 station_replay = { path = "../station-replay" }
 station_supervisor = { path = "../station-supervisor" }
+station_schema = { path = "../station-schema" }
 station_telemetry = { path = "../station-telemetry" }
 tracing = "0.1"
