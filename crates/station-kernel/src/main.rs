@@ -6,6 +6,8 @@ use plugin_registry::{PluginManifest, PluginRegistry};
 use runtime_core::EventBus;
 
 fn main() {
+    station_telemetry::init();
+
     let mut registry = PluginRegistry::default();
     registry
         .register(PluginManifest {
@@ -24,20 +26,25 @@ fn main() {
     let rx = bus.subscribe();
 
     let mut event = quantum_state_event();
-    assert!(registry.topic_allowed(&event.topic));
+    assert!(registry.can_publish(&event.source, &event.topic));
 
     let mut ledger = ArtifactLedger::default();
-    let artifact_hash = ledger.record(
-        "quantum_state_payload",
-        "adapter_quantum",
-        event.payload.as_bytes(),
-    );
+    let payload_bytes = serde_json::to_vec(&event.payload).expect("serialize payload");
+    let artifact_hash = ledger.record("quantum_state_payload", "adapter_quantum", &payload_bytes);
     event.artifact_hash = Some(artifact_hash);
+
+    tracing::info!(
+        topic = %event.topic,
+        source = %event.source,
+        trace_id = %event.trace_id,
+        "publishing event"
+    );
 
     bus.publish(event);
     let received = rx.recv().expect("receive");
 
-    println!("browser frame: {}", to_browser_frame(&received));
+    let browser_frame = to_browser_frame(&received).expect("serialize browser frame");
+    println!("browser frame: {browser_frame}");
     println!("gpui line: {}", to_gpui_overlay_line(&received));
     println!("ledger entries: {}", ledger.records().len());
 }
