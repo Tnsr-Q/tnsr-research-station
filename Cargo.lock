@@ -427,6 +427,7 @@ version = "0.1.0"
 dependencies = [
  "hex",
  "runtime_core",
+ "serde",
  "serde_json",
  "sha2",
  "thiserror",

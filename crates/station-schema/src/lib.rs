@@ -3,12 +3,18 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum FieldType {
+    Integer,
+    Number,
+}
+
 #[derive(Debug, Clone)]
 pub struct PayloadSchema {
     pub id: String,
     pub topic: String,
     pub version: String,
-    pub required_fields: Vec<String>,
+    pub required_fields: Vec<(String, FieldType)>,
     pub schema_hash: String,
 }
 
@@ -28,6 +34,14 @@ pub enum SchemaError {
     #[error("event topic {topic} missing required field: {field}")]
     MissingRequiredField { topic: String, field: String },
 
+    #[error("event topic {topic} field {field} has wrong type: expected {expected:?}, found {found:?}")]
+    WrongFieldType {
+        topic: String,
+        field: String,
+        expected: FieldType,
+        found: String,
+    },
+
     #[error("event schema hash mismatch for topic {topic}: expected {expected}, found {found:?}")]
     SchemaHashMismatch {
         topic: String,
@@ -37,33 +51,32 @@ pub enum SchemaError {
 }
 
 impl PayloadSchema {
-    pub fn new(
-        id: impl Into<String>,
-        topic: impl Into<String>,
-        version: impl Into<String>,
-        required_fields: Vec<String>,
-    ) -> Self {
-        let id = id.into();
-        let topic = topic.into();
-        let version = version.into();
+    pub fn new(id: impl Into<String>, topic: impl Into<String>, version: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            topic: topic.into(),
+            version: version.into(),
+            required_fields: Vec::new(),
+            schema_hash: String::new(),
+        }
+    }
 
+    pub fn required(mut self, field: impl Into<String>, field_type: FieldType) -> Self {
+        self.required_fields.push((field.into(), field_type));
+        self
+    }
+
+    pub fn build(mut self) -> Self {
         let canonical = serde_json::json!({
-            "id": id,
-            "topic": topic,
-            "version": version,
-            "required_fields": required_fields,
+            "id": self.id,
+            "topic": self.topic,
+            "version": self.version,
+            "required_fields": self.required_fields,
         });
 
         let bytes = serde_json::to_vec(&canonical).expect("schema serialization cannot fail");
-        let schema_hash = format!("sha256:{}", hex::encode(Sha256::digest(bytes)));
-
-        Self {
-            id,
-            topic,
-            version,
-            required_fields,
-            schema_hash,
-        }
+        self.schema_hash = format!("sha256:{}", hex::encode(Sha256::digest(bytes)));
+        self
     }
 }
 
@@ -103,12 +116,24 @@ impl SchemaRegistry {
             });
         }
 
-        for field in &schema.required_fields {
-            if !has_field(&event.payload, field) {
-                return Err(SchemaError::MissingRequiredField {
-                    topic: event.topic.clone(),
-                    field: field.clone(),
-                });
+        for (field, expected_type) in &schema.required_fields {
+            match get_field(&event.payload, field) {
+                None => {
+                    return Err(SchemaError::MissingRequiredField {
+                        topic: event.topic.clone(),
+                        field: field.clone(),
+                    });
+                }
+                Some(value) => {
+                    if !matches_type(value, expected_type) {
+                        return Err(SchemaError::WrongFieldType {
+                            topic: event.topic.clone(),
+                            field: field.clone(),
+                            expected: expected_type.clone(),
+                            found: type_name(value),
+                        });
+                    }
+                }
             }
         }
 
@@ -124,10 +149,34 @@ impl SchemaRegistry {
     }
 }
 
-fn has_field(payload: &Value, field: &str) -> bool {
+fn get_field<'a>(payload: &'a Value, field: &str) -> Option<&'a Value> {
     match payload {
-        Value::Object(map) => map.contains_key(field),
-        _ => false,
+        Value::Object(map) => map.get(field),
+        _ => None,
+    }
+}
+
+fn matches_type(value: &Value, expected_type: &FieldType) -> bool {
+    match expected_type {
+        FieldType::Integer => value.is_i64() || value.is_u64(),
+        FieldType::Number => value.is_f64() || value.is_i64() || value.is_u64(),
+    }
+}
+
+fn type_name(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_string(),
+        Value::Bool(_) => "boolean".to_string(),
+        Value::Number(n) => {
+            if n.is_i64() || n.is_u64() {
+                "integer".to_string()
+            } else {
+                "number".to_string()
+            }
+        }
+        Value::String(_) => "string".to_string(),
+        Value::Array(_) => "array".to_string(),
+        Value::Object(_) => "object".to_string(),
     }
 }
 
@@ -141,16 +190,11 @@ mod tests {
     fn test_schema_hash_is_attached_and_validates() {
         let mut registry = SchemaRegistry::default();
 
-        let schema = PayloadSchema::new(
-            "tnsr.quantum.state.v1",
-            "quantum.state",
-            "1",
-            vec![
-                "state_dim".to_string(),
-                "collapse_ratio".to_string(),
-                "euler_characteristic".to_string(),
-            ],
-        );
+        let schema = PayloadSchema::new("tnsr.quantum.state.v1", "quantum.state", "1")
+            .required("state_dim", FieldType::Integer)
+            .required("collapse_ratio", FieldType::Number)
+            .required("euler_characteristic", FieldType::Integer)
+            .build();
 
         registry.register(schema).expect("register schema");
 
@@ -176,12 +220,10 @@ mod tests {
     fn test_missing_required_field_fails() {
         let mut registry = SchemaRegistry::default();
 
-        let schema = PayloadSchema::new(
-            "tnsr.quantum.state.v1",
-            "quantum.state",
-            "1",
-            vec!["state_dim".to_string(), "collapse_ratio".to_string()],
-        );
+        let schema = PayloadSchema::new("tnsr.quantum.state.v1", "quantum.state", "1")
+            .required("state_dim", FieldType::Integer)
+            .required("collapse_ratio", FieldType::Number)
+            .build();
 
         registry.register(schema).expect("register schema");
 
@@ -209,12 +251,9 @@ mod tests {
     fn test_schema_hash_mismatch_fails() {
         let mut registry = SchemaRegistry::default();
 
-        let schema = PayloadSchema::new(
-            "tnsr.quantum.state.v1",
-            "quantum.state",
-            "1",
-            vec!["state_dim".to_string()],
-        );
+        let schema = PayloadSchema::new("tnsr.quantum.state.v1", "quantum.state", "1")
+            .required("state_dim", FieldType::Integer)
+            .build();
 
         registry.register(schema).expect("register schema");
 
@@ -232,5 +271,85 @@ mod tests {
             .expect_err("bad schema hash should fail");
 
         assert!(matches!(err, SchemaError::SchemaHashMismatch { .. }));
+    }
+
+    #[test]
+    fn test_wrong_type_fails() {
+        let mut registry = SchemaRegistry::default();
+
+        let schema = PayloadSchema::new("tnsr.quantum.state.v1", "quantum.state", "1")
+            .required("state_dim", FieldType::Integer)
+            .required("collapse_ratio", FieldType::Number)
+            .build();
+
+        registry.register(schema).expect("register schema");
+
+        // Provide a string instead of an integer for state_dim
+        let mut event = EventEnvelope::new(
+            "run-test",
+            "quantum.state",
+            "adapter_quantum",
+            json!({
+                "state_dim": "not_an_integer",
+                "collapse_ratio": 0.42
+            }),
+        );
+
+        registry
+            .attach_schema_hash(&mut event)
+            .expect("attach schema hash");
+
+        let err = registry
+            .validate(&event)
+            .expect_err("wrong type should fail");
+
+        assert!(matches!(err, SchemaError::WrongFieldType { .. }));
+    }
+
+    #[test]
+    fn test_schema_hash_changes_when_field_types_change() {
+        let schema1 = PayloadSchema::new("tnsr.quantum.state.v1", "quantum.state", "1")
+            .required("state_dim", FieldType::Integer)
+            .build();
+
+        let schema2 = PayloadSchema::new("tnsr.quantum.state.v1", "quantum.state", "1")
+            .required("state_dim", FieldType::Number)
+            .build();
+
+        assert_ne!(
+            schema1.schema_hash, schema2.schema_hash,
+            "schema hash should change when field types change"
+        );
+    }
+
+    #[test]
+    fn test_valid_payload_passes() {
+        let mut registry = SchemaRegistry::default();
+
+        let schema = PayloadSchema::new("tnsr.quantum.state.v1", "quantum.state", "1")
+            .required("state_dim", FieldType::Integer)
+            .required("collapse_ratio", FieldType::Number)
+            .required("euler_characteristic", FieldType::Integer)
+            .build();
+
+        registry.register(schema).expect("register schema");
+
+        let mut event = EventEnvelope::new(
+            "run-test",
+            "quantum.state",
+            "adapter_quantum",
+            json!({
+                "state_dim": 16,
+                "collapse_ratio": 0.42,
+                "euler_characteristic": 8
+            }),
+        );
+
+        registry
+            .attach_schema_hash(&mut event)
+            .expect("attach schema hash");
+
+        // This should pass without error
+        registry.validate(&event).expect("valid payload should pass");
     }
 }
