@@ -416,103 +416,108 @@ Test:
 ```bash
 cargo test --workspace
 ```
-Core invariants
-Event invariants
 
-Every runtime event must be a runtime_core::EventEnvelope.
+## Core invariants
+
+### Event invariants
+
+Every runtime event must be a `runtime_core::EventEnvelope`.
 
 Required conceptual fields:
 
-version
-event_id
-trace_id
-parent_id
-session_id
-topic
-source
-created_at_ms
-payload
-input_hash
-artifact_hash
-schema_hash
-plugin_hash
+- `version`
+- `event_id`
+- `trace_id`
+- `parent_id`
+- `session_id`
+- `topic`
+- `source`
+- `created_at_ms`
+- `payload`
+- `input_hash`
+- `artifact_hash`
+- `schema_hash`
+- `plugin_hash`
 
-Derived events should use EventEnvelope::child_of so trace lineage is preserved.
+Derived events should use `EventEnvelope::child_of` so trace lineage is preserved.
 
-Policy invariants
+### Policy invariants
 
 No plugin-originating event should be published or replayed without policy admission.
 
 Policy currently checks:
 
-plugin exists
-plugin may publish topic
-plugin is in allowed runtime state
-schema exists for topic
-schema_hash is attached
-payload validates
+- plugin exists
+- plugin may publish topic
+- plugin is in allowed runtime state
+- schema exists for topic
+- `schema_hash` is attached
+- payload validates
 
-Future policy denials should be emitted as replayable policy.event.denied events rather than causing kernel panics.
+Future policy denials should be emitted as replayable `policy.event.denied` events rather than causing kernel panics.
 
-Replay invariants
+### Replay invariants
 
 Replay records are append-only and hash chained.
 
 Each record contains:
 
-index
-event
-event_hash
-previous_record_hash
-record_hash
+- `index`
+- `event`
+- `event_hash`
+- `previous_record_hash`
+- `record_hash`
 
 Replay verification checks:
 
-contiguous indices
-event hash correctness
-previous-record hash linkage
-record hash correctness
-Schema invariants
+- contiguous indices
+- event hash correctness
+- previous-record hash linkage
+- record hash correctness
+
+### Schema invariants
 
 Every policy-admitted event topic should have a registered schema.
 
 The current schema layer validates required fields and schema hashes. Field-type validation is the next natural schema hardening step.
 
-Plugin invariants
+### Plugin invariants
 
 Plugins are typed runtime entities.
 
 A plugin manifest defines:
 
-id
-kind
-transport
-version
-artifact_hash
-publishes
-subscribes
-capabilities
+- `id`
+- `kind`
+- `transport`
+- `version`
+- `artifact_hash`
+- `publishes`
+- `subscribes`
+- `capabilities`
 
 Plugins may only publish topics declared in their manifests.
 
-Manifest invariants
+### Manifest invariants
 
 A completed run should produce:
 
+```text
 runs/<run_id>/events.jsonl
 runs/<run_id>/manifest.json
+```
 
 The manifest should summarize:
 
-run identity
-profile name
-status
-event log path
-replay verification result
-last replay hash
-registered plugins
-registered schemas
-recorded artifacts
+- run identity
+- profile name
+- status
+- event log path
+- replay verification result
+- last replay hash
+- registered plugins
+- registered schemas
+- recorded artifacts
 
 The manifest stores relative paths so the run folder can be moved as a sealed artifact.
 
