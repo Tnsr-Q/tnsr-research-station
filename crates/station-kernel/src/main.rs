@@ -3,31 +3,53 @@ use artifact_ledger::{ArtifactLedger, ArtifactRecordRequest};
 use bridge_browser::to_browser_frame;
 use bridge_gpui::to_gpui_overlay_line;
 use plugin_registry::{PluginKind, PluginManifest, PluginRegistry, TransportKind};
-use runtime_core::{EventBus, SessionState};
+use runtime_core::EventBus;
+use station_replay::JsonlReplayLog;
+use station_supervisor::{PluginRuntimeState, StationSupervisor};
 
 fn main() {
     station_telemetry::init();
 
     let mut registry = PluginRegistry::default();
+    let quantum_manifest = PluginManifest {
+        id: "adapter_quantum".into(),
+        kind: PluginKind::Compute,
+        transport: TransportKind::Local,
+        version: "0.1.0".into(),
+        artifact_hash: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            .into(),
+        subscribes: vec!["quantum.analyze".into()],
+        publishes: vec!["quantum.state".into()],
+        capabilities: vec!["collapse_ratio".into(), "euler_characteristic".into()],
+    };
+
     registry
-        .register(PluginManifest {
-            id: "adapter_quantum".into(),
-            kind: PluginKind::Compute,
-            transport: TransportKind::Local,
-            version: "0.1.0".into(),
-            artifact_hash:
-                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
-            subscribes: vec!["quantum.analyze".into()],
-            publishes: vec!["quantum.state".into()],
-            capabilities: vec!["collapse_ratio".into(), "euler_characteristic".into()],
-        })
+        .register(quantum_manifest.clone())
         .expect("plugin registration");
+
+    let mut supervisor = StationSupervisor::new("default");
+    let mut replay =
+        JsonlReplayLog::open(format!("runs/{}/events.jsonl", supervisor.session.run_id))
+            .expect("open replay log");
+
+    let supervisor_event = supervisor
+        .register_plugin(&quantum_manifest)
+        .expect("supervisor register plugin");
+    replay
+        .append(&supervisor_event)
+        .expect("append supervisor event");
+
+    let admitted_event = supervisor
+        .transition("adapter_quantum", PluginRuntimeState::Admitted)
+        .expect("admit plugin");
+    replay
+        .append(&admitted_event)
+        .expect("append admitted event");
 
     let mut bus = EventBus::new();
     let rx = bus.subscribe();
 
-    let session = SessionState::new("default");
-    let mut event = quantum_state_event(session.run_id.clone());
+    let mut event = quantum_state_event(supervisor.session.run_id.clone());
     assert!(registry.can_publish(&event.source, &event.topic));
 
     let mut ledger = ArtifactLedger::default();
@@ -53,6 +75,8 @@ fn main() {
     let report = bus.publish(event);
     assert_eq!(report.failed, 0);
     let received = rx.recv().expect("receive");
+
+    replay.append(&received).expect("append received event");
 
     let browser_frame = to_browser_frame(&received).expect("serialize browser frame");
     println!("browser frame: {browser_frame}");

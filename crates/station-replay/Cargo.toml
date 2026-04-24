@@ -1,0 +1,13 @@
+[package]
+name = "station_replay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+runtime_core = { path = "../runtime-core" }
+serde_json = "1"
+thiserror = "1"
+
+[dev-dependencies]
+ulid = "1"
