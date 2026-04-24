@@ -16,4 +16,6 @@ station_policy = { path = "../station-policy" }
 station_supervisor = { path = "../station-supervisor" }
 station_schema = { path = "../station-schema" }
 station_telemetry = { path = "../station-telemetry" }
+station_run = { path = "../station-run" }
+serde_json = "1"
 tracing = "0.1"

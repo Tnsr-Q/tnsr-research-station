@@ -114,6 +114,14 @@ impl PluginRegistry {
             .map(|plugin| plugin.subscribes.iter().any(|t| t == topic))
             .unwrap_or(false)
     }
+
+    pub fn plugin_count(&self) -> usize {
+        self.plugins.len()
+    }
+
+    pub fn plugins(&self) -> Vec<&PluginManifest> {
+        self.plugins.values().collect()
+    }
 }
 
 #[cfg(test)]
