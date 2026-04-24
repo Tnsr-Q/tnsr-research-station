@@ -552,13 +552,19 @@ All initially planned PRs have been implemented:
 
 ### Next Development Priorities
 
-**Kernel Consolidation and Hardening**
+**Kernel Consolidation and Hardening** ✓
 
 Goal: Refactor station-kernel for maintainability and add comprehensive integration tests.
 
-Next steps:
-- Extract duplicated manifest-summary construction into helper functions
-- Add integration tests for declarative file loading (profiles, plugins, schemas)
+Completed:
+- ✓ Extracted duplicated manifest-summary construction into helper functions
+- ✓ Added integration tests for declarative file loading (profiles, plugins, schemas)
+- ✓ Added end-to-end integration tests for kernel run lifecycle
+- ✓ Added integration tests for policy denial flow
+- ✓ Added integration tests for supervisor lifecycle events
+- ✓ Added integration tests for artifact ledger tracking
+
+Remaining considerations:
 - Decide on system-event schema policy (exempt vs. register schemas)
 - Improve schema error types for better diagnostics
 

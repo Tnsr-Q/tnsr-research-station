@@ -1,0 +1,101 @@
+{
+  "run_id": "run-01KQ0S7RSYA6N1YR24GHSHQSMA",
+  "profile_name": "default",
+  "status": "completed",
+  "event_log_path": "events.jsonl",
+  "manifest_path": "manifest.json",
+  "started_at_ms": 1777069187901,
+  "completed_at_ms": 1777069187904,
+  "records_verified": 6,
+  "last_record_hash": "c4930d576188c46a44c197e43efc2ff0424652e46aff6b04054aa19de1d6f88e",
+  "replay_valid": true,
+  "verification_error": null,
+  "failure_reason": null,
+  "plugin_count": 2,
+  "schema_count": 2,
+  "artifact_count": 1,
+  "plugins": [
+    {
+      "id": "adapter_quantum",
+      "kind": "compute",
+      "transport": "local",
+      "version": "0.1.0",
+      "artifact_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "publishes": [
+        "quantum.state"
+      ],
+      "subscribes": [
+        "quantum.analyze"
+      ],
+      "capabilities": [
+        "collapse_ratio",
+        "euler_characteristic",
+        "galois_order"
+      ]
+    },
+    {
+      "id": "adapter_rag",
+      "kind": "semantic",
+      "transport": "local",
+      "version": "0.1.0",
+      "artifact_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "publishes": [
+        "rag.result"
+      ],
+      "subscribes": [
+        "quantum.state"
+      ],
+      "capabilities": [
+        "retrieval",
+        "agent_log_panel"
+      ]
+    }
+  ],
+  "schemas": [
+    {
+      "id": "tnsr.quantum.state.v1",
+      "topic": "quantum.state",
+      "version": "1",
+      "schema_hash": "sha256:4dc1d05cfa389a46fcad3247012fd8f9f26f9d6da05436f70b5e05a88f5f2b4b",
+      "required_fields": [
+        [
+          "state_dim",
+          "Integer"
+        ],
+        [
+          "collapse_ratio",
+          "Number"
+        ],
+        [
+          "euler_characteristic",
+          "Integer"
+        ]
+      ]
+    },
+    {
+      "id": "tnsr.rag.result.v1",
+      "topic": "rag.result",
+      "version": "1",
+      "schema_hash": "sha256:0431a7bf7d7d32b744763f95fb92e332e293627e4d1c127724948f6242be59ad",
+      "required_fields": [
+        [
+          "message",
+          "String"
+        ]
+      ]
+    }
+  ],
+  "artifacts": [
+    {
+      "artifact_id": "quantum_state_payload",
+      "source": "adapter_quantum",
+      "hash": "sha256:bc84ef86df582d11f8dca664757655ea79d5610f3e2fd93001fcb50487ec5883",
+      "algorithm": "sha256",
+      "byte_len": 63,
+      "content_type": "application/json",
+      "trace_id": "trace-01KQ0S7RSZ67SSBTG2PEWHXF23",
+      "parent_hash": null,
+      "schema_hash": "sha256:4dc1d05cfa389a46fcad3247012fd8f9f26f9d6da05436f70b5e05a88f5f2b4b"
+    }
+  ]
+}
