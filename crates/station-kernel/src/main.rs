@@ -168,6 +168,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         let type_str = match field_type {
                             FieldType::Integer => "Integer",
                             FieldType::Number => "Number",
+                            FieldType::String => "String",
                         };
                         (name.clone(), type_str.to_string())
                     })
@@ -267,6 +268,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     let type_str = match field_type {
                         FieldType::Integer => "Integer",
                         FieldType::Number => "Number",
+                        FieldType::String => "String",
                     };
                     (name.clone(), type_str.to_string())
                 })

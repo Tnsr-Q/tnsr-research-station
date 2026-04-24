@@ -6,6 +6,7 @@
     "plugins/rag.plugin.json"
   ],
   "schema_files": [
-    "schemas/quantum-state.schema.json"
+    "schemas/quantum-state.schema.json",
+    "schemas/rag-result.schema.json"
   ]
 }
