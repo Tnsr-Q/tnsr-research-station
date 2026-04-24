@@ -36,14 +36,14 @@ fn main() {
         .register_plugin(&quantum_manifest)
         .expect("supervisor register plugin");
     replay
-        .append(&supervisor_event)
+        .append_record(&supervisor_event)
         .expect("append supervisor event");
 
     let admitted_event = supervisor
         .transition("adapter_quantum", PluginRuntimeState::Admitted)
         .expect("admit plugin");
     replay
-        .append(&admitted_event)
+        .append_record(&admitted_event)
         .expect("append admitted event");
 
     let mut bus = EventBus::new();
@@ -76,7 +76,9 @@ fn main() {
     assert_eq!(report.failed, 0);
     let received = rx.recv().expect("receive");
 
-    replay.append(&received).expect("append received event");
+    replay
+        .append_record(&received)
+        .expect("append received event");
 
     let browser_frame = to_browser_frame(&received).expect("serialize browser frame");
     println!("browser frame: {browser_frame}");
