@@ -116,7 +116,81 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         supervisor: &supervisor,
     };
     // Policy checks: existence, authorization, state, schema hash match, validation
-    policy.admit_event(&mut event)?.assert_allowed();
+    let admission = policy.admit_event(&mut event)?;
+
+    // Append policy event to replay
+    if let Some(policy_event) = admission.policy_event {
+        replay.append_record(&policy_event)?;
+    }
+
+    // Only proceed if allowed
+    if !admission.allowed {
+        eprintln!(
+            "Policy denial: {}",
+            admission.reason.as_deref().unwrap_or("unknown reason")
+        );
+        // Write manifest and exit without panic
+        let verification_result = JsonlReplayLog::verify_chain(&events_path);
+        let (records_verified, last_hash, verification_error) = match verification_result {
+            Ok(report) => (report.records_verified, report.last_record_hash, None),
+            Err(err) => (0, None, Some(err.to_string())),
+        };
+
+        let mut plugins: Vec<PluginSummary> = registry
+            .plugins()
+            .into_iter()
+            .map(|m| PluginSummary {
+                id: m.id.clone(),
+                kind: plugin_kind_wire(&m.kind).into(),
+                transport: transport_kind_wire(&m.transport).into(),
+                version: m.version.clone(),
+                artifact_hash: m.artifact_hash.clone(),
+                publishes: m.publishes.clone(),
+                subscribes: m.subscribes.clone(),
+                capabilities: m.capabilities.clone(),
+            })
+            .collect();
+        plugins.sort_by(|a, b| a.id.cmp(&b.id));
+
+        let mut schema_summaries: Vec<SchemaSummary> = schemas
+            .schemas()
+            .into_iter()
+            .map(|s| SchemaSummary {
+                id: s.id.clone(),
+                topic: s.topic.clone(),
+                version: s.version.clone(),
+                schema_hash: s.schema_hash.clone(),
+                required_fields: s.required_fields.clone(),
+            })
+            .collect();
+        schema_summaries.sort_by(|a, b| a.topic.cmp(&b.topic));
+
+        let replay_valid = verification_error.is_none();
+
+        let manifest = RunManifest {
+            run_id,
+            profile_name,
+            status: RunStatus::Failed,
+            event_log_path: "events.jsonl".into(),
+            manifest_path: "manifest.json".into(),
+            started_at_ms,
+            completed_at_ms: Some(now_ms()?),
+            records_verified,
+            last_record_hash: last_hash,
+            replay_valid,
+            verification_error: admission.reason,
+            plugin_count: plugins.len(),
+            schema_count: schema_summaries.len(),
+            artifact_count: 0,
+            plugins,
+            schemas: schema_summaries,
+            artifacts: vec![],
+        };
+
+        write_manifest_json(&manifest, &manifest_path)?;
+        println!("Run sealed with policy denial: {}", manifest_path.display());
+        return Ok(());
+    }
 
     let payload_bytes = serde_json::to_vec(&event.payload)?;
     let artifact = ledger.record_bytes(ArtifactRecordRequest {

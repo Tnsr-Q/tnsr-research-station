@@ -1,5 +1,6 @@
 use plugin_registry::PluginRegistry;
 use runtime_core::EventEnvelope;
+use serde_json::json;
 use station_schema::{SchemaError, SchemaRegistry};
 use station_supervisor::{PluginRuntimeState, StationSupervisor};
 
@@ -9,24 +10,27 @@ pub enum PolicyError {
     Schema(#[from] SchemaError),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct EventAdmission {
     pub allowed: bool,
     pub reason: Option<String>,
+    pub policy_event: Option<EventEnvelope>,
 }
 
 impl EventAdmission {
-    pub fn allowed() -> Self {
+    pub fn allowed(policy_event: EventEnvelope) -> Self {
         Self {
             allowed: true,
             reason: None,
+            policy_event: Some(policy_event),
         }
     }
 
-    pub fn denied(reason: impl Into<String>) -> Self {
+    pub fn denied(reason: impl Into<String>, policy_event: EventEnvelope) -> Self {
         Self {
             allowed: false,
             reason: Some(reason.into()),
+            policy_event: Some(policy_event),
         }
     }
 
@@ -46,44 +50,69 @@ pub struct PolicyEngine<'a> {
 }
 
 impl<'a> PolicyEngine<'a> {
+    fn create_policy_event(
+        &self,
+        event: &EventEnvelope,
+        allowed: bool,
+        reason: Option<&str>,
+    ) -> EventEnvelope {
+        let topic = if allowed {
+            "policy.event.admitted"
+        } else {
+            "policy.event.denied"
+        };
+
+        let mut payload = json!({
+            "source": event.source.clone(),
+            "topic": event.topic.clone(),
+            "event_id": event.event_id.clone(),
+        });
+
+        if let Some(reason) = reason {
+            payload["reason"] = json!(reason);
+        }
+
+        EventEnvelope::child_of(
+            event,
+            topic,
+            "station_policy",
+            payload,
+        )
+    }
+
     pub fn admit_event(&self, event: &mut EventEnvelope) -> Result<EventAdmission, PolicyError> {
         // 1. Source plugin must be registered.
         if !self.plugins.has_plugin(&event.source) {
-            return Ok(EventAdmission::denied(format!(
-                "plugin not registered: {}",
-                event.source
-            )));
+            let reason = format!("plugin not registered: {}", event.source);
+            let policy_event = self.create_policy_event(event, false, Some(&reason));
+            return Ok(EventAdmission::denied(reason, policy_event));
         }
 
         // 2. Source plugin must be allowed to publish event.topic.
         if !self.plugins.can_publish(&event.source, &event.topic) {
-            return Ok(EventAdmission::denied(format!(
-                "plugin {} cannot publish topic {}",
-                event.source, event.topic
-            )));
+            let reason = format!("plugin {} cannot publish topic {}", event.source, event.topic);
+            let policy_event = self.create_policy_event(event, false, Some(&reason));
+            return Ok(EventAdmission::denied(reason, policy_event));
         }
 
         // 3. Source plugin must be Admitted or Running.
         let Some(state) = self.supervisor.state_of(&event.source) else {
-            return Ok(EventAdmission::denied(format!(
-                "plugin {} missing from supervisor runtime",
-                event.source
-            )));
+            let reason = format!("plugin {} missing from supervisor runtime", event.source);
+            let policy_event = self.create_policy_event(event, false, Some(&reason));
+            return Ok(EventAdmission::denied(reason, policy_event));
         };
 
         if state != PluginRuntimeState::Admitted && state != PluginRuntimeState::Running {
-            return Ok(EventAdmission::denied(format!(
-                "plugin {} not in publishable state: {state:?}",
-                event.source
-            )));
+            let reason = format!("plugin {} not in publishable state: {state:?}", event.source);
+            let policy_event = self.create_policy_event(event, false, Some(&reason));
+            return Ok(EventAdmission::denied(reason, policy_event));
         }
 
         // 4. Schema must exist.
         if self.schemas.schema_for_topic(&event.topic).is_none() {
-            return Ok(EventAdmission::denied(format!(
-                "missing schema for topic {}",
-                event.topic
-            )));
+            let reason = format!("missing schema for topic {}", event.topic);
+            let policy_event = self.create_policy_event(event, false, Some(&reason));
+            return Ok(EventAdmission::denied(reason, policy_event));
         }
 
         // 5. Attach schema hash if missing.
@@ -94,8 +123,9 @@ impl<'a> PolicyEngine<'a> {
         // 6. Validate payload.
         self.schemas.validate(event)?;
 
-        // 7. Return allowed.
-        Ok(EventAdmission::allowed())
+        // 7. Create admission policy event and return allowed.
+        let policy_event = self.create_policy_event(event, true, None);
+        Ok(EventAdmission::allowed(policy_event))
     }
 }
 
@@ -175,6 +205,13 @@ mod tests {
 
         assert!(admission.allowed);
         assert!(event.schema_hash.is_some());
+
+        // Verify policy event was created
+        let policy_event = admission.policy_event.expect("policy event should exist");
+        assert_eq!(policy_event.topic, "policy.event.admitted");
+        assert_eq!(policy_event.source, "station_policy");
+        assert_eq!(policy_event.trace_id, event.trace_id);
+        assert_eq!(policy_event.parent_id.as_ref(), Some(&event.event_id));
     }
 
     #[test]
@@ -202,5 +239,66 @@ mod tests {
             .reason
             .expect("denial reason")
             .contains("not registered"));
+
+        // Verify policy event was created
+        let policy_event = admission.policy_event.expect("policy event should exist");
+        assert_eq!(policy_event.topic, "policy.event.denied");
+        assert_eq!(policy_event.source, "station_policy");
+        assert_eq!(policy_event.trace_id, event.trace_id);
+        assert_eq!(policy_event.parent_id.as_ref(), Some(&event.event_id));
+
+        // Verify denial includes required fields
+        let payload = &policy_event.payload;
+        assert_eq!(payload["source"], "unknown_plugin");
+        assert_eq!(payload["topic"], "quantum.state");
+        assert!(payload["reason"].as_str().unwrap().contains("not registered"));
+    }
+
+    #[test]
+    fn policy_events_are_replayable_on_denial() {
+        use station_replay::JsonlReplayLog;
+
+        let temp_dir = std::env::temp_dir();
+        let run_id = format!("run-test-{}", ulid::Ulid::new());
+        let events_path = temp_dir.join(format!("{}-events.jsonl", run_id));
+
+        let supervisor = StationSupervisor::new("default");
+        let schemas = SchemaRegistry::default();
+        let registry = PluginRegistry::default();
+
+        let mut event = EventEnvelope::new(
+            &run_id,
+            "quantum.state",
+            "unknown_plugin",
+            json!({ "state_dim": 16 }),
+        );
+
+        let policy = PolicyEngine {
+            plugins: &registry,
+            schemas: &schemas,
+            supervisor: &supervisor,
+        };
+
+        let admission = policy.admit_event(&mut event).expect("policy check");
+
+        assert!(!admission.allowed);
+
+        // Write policy denial to replay
+        let mut replay = JsonlReplayLog::open(&events_path).expect("open replay");
+        if let Some(policy_event) = admission.policy_event {
+            replay.append(&policy_event).expect("append policy event");
+        }
+
+        // Verify replay contains the denial
+        let events = JsonlReplayLog::read_all(&events_path).expect("read replay");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].topic, "policy.event.denied");
+        assert_eq!(events[0].source, "station_policy");
+
+        // Verify replay chain is valid
+        let report = JsonlReplayLog::verify_chain(&events_path).expect("verify chain");
+        assert_eq!(report.records_verified, 1);
+
+        let _ = std::fs::remove_file(events_path);
     }
 }
