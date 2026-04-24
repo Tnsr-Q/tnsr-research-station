@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct PluginManifest {
@@ -15,7 +15,6 @@ pub struct PluginManifest {
 #[derive(Default)]
 pub struct PluginRegistry {
     plugins: HashMap<String, PluginManifest>,
-    allowed_topics: HashSet<String>,
 }
 
 impl PluginRegistry {
@@ -24,14 +23,21 @@ impl PluginRegistry {
             return Err(format!("duplicate plugin: {}", plugin.id));
         }
 
-        self.allowed_topics
-            .extend(plugin.subscribes.iter().cloned());
-        self.allowed_topics.extend(plugin.publishes.iter().cloned());
         self.plugins.insert(plugin.id.clone(), plugin);
         Ok(())
     }
 
-    pub fn topic_allowed(&self, topic: &str) -> bool {
-        self.allowed_topics.contains(topic)
+    pub fn can_publish(&self, plugin_id: &str, topic: &str) -> bool {
+        self.plugins
+            .get(plugin_id)
+            .map(|plugin| plugin.publishes.iter().any(|t| t == topic))
+            .unwrap_or(false)
+    }
+
+    pub fn can_subscribe(&self, plugin_id: &str, topic: &str) -> bool {
+        self.plugins
+            .get(plugin_id)
+            .map(|plugin| plugin.subscribes.iter().any(|t| t == topic))
+            .unwrap_or(false)
     }
 }

@@ -1,15 +1,20 @@
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{SystemTime, UNIX_EPOCH};
+use ulid::Ulid;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventEnvelope {
+    pub version: String,
     pub event_id: String,
     pub trace_id: String,
+    pub parent_id: Option<String>,
     pub session_id: String,
     pub topic: String,
     pub source: String,
     pub created_at_ms: u128,
-    pub payload: String,
+    pub payload: Value,
     pub input_hash: Option<String>,
     pub artifact_hash: Option<String>,
     pub schema_hash: Option<String>,
@@ -23,24 +28,22 @@ fn now_ms() -> u128 {
         .unwrap_or_default()
 }
 
-fn pseudo_id(prefix: &str) -> String {
-    format!("{}-{}", prefix, now_ms())
+fn id(prefix: &str) -> String {
+    format!("{}-{}", prefix, Ulid::new())
 }
 
 impl EventEnvelope {
-    pub fn new(
-        topic: impl Into<String>,
-        source: impl Into<String>,
-        payload: impl Into<String>,
-    ) -> Self {
+    pub fn new(topic: impl Into<String>, source: impl Into<String>, payload: Value) -> Self {
         Self {
-            event_id: pseudo_id("evt"),
-            trace_id: pseudo_id("trace"),
-            session_id: pseudo_id("session"),
+            version: "tnsr.event.v1".into(),
+            event_id: id("evt"),
+            trace_id: id("trace"),
+            parent_id: None,
+            session_id: id("session"),
             topic: topic.into(),
             source: source.into(),
             created_at_ms: now_ms(),
-            payload: payload.into(),
+            payload,
             input_hash: None,
             artifact_hash: None,
             schema_hash: None,
@@ -89,7 +92,7 @@ pub struct SessionState {
 impl SessionState {
     pub fn new(profile_name: impl Into<String>) -> Self {
         Self {
-            run_id: pseudo_id("run"),
+            run_id: id("run"),
             profile_name: profile_name.into(),
             started_at_ms: now_ms(),
         }

@@ -11,3 +11,5 @@ bridge_browser = { path = "../bridge-browser" }
 bridge_gpui = { path = "../bridge-gpui" }
 plugin_registry = { path = "../plugin-registry" }
 runtime_core = { path = "../runtime-core" }
+station_telemetry = { path = "../station-telemetry" }
+tracing = "0.1"

@@ -1,5 +1,4 @@
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone)]
@@ -22,10 +21,8 @@ fn now_ms() -> u128 {
         .unwrap_or_default()
 }
 
-fn pseudo_sha256(data: &[u8]) -> String {
-    let mut hasher = DefaultHasher::new();
-    data.hash(&mut hasher);
-    format!("sha256:{:016x}", hasher.finish())
+fn sha256(data: &[u8]) -> String {
+    format!("sha256:{}", hex::encode(Sha256::digest(data)))
 }
 
 impl ArtifactLedger {
@@ -35,7 +32,7 @@ impl ArtifactLedger {
         source: impl Into<String>,
         data: &[u8],
     ) -> String {
-        let hash = pseudo_sha256(data);
+        let hash = sha256(data);
         self.records.push(ArtifactRecord {
             artifact_id: artifact_id.into(),
             source: source.into(),
