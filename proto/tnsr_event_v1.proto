@@ -1,0 +1,16 @@
+syntax = "proto3";
+package tnsr.event.v1;
+
+message EventEnvelope {
+  string event_id = 1;
+  string trace_id = 2;
+  string session_id = 3;
+  string topic = 4;
+  string source = 5;
+  string created_at = 6;
+  string payload_json = 7;
+  string input_hash = 8;
+  string artifact_hash = 9;
+  string schema_hash = 10;
+  string plugin_hash = 11;
+}

@@ -1,0 +1,13 @@
+[package]
+name = "station_kernel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+adapter_quantum = { path = "../adapter-quantum" }
+artifact_ledger = { path = "../artifact-ledger" }
+bridge_browser = { path = "../bridge-browser" }
+bridge_gpui = { path = "../bridge-gpui" }
+plugin_registry = { path = "../plugin-registry" }
+runtime_core = { path = "../runtime-core" }
