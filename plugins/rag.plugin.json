@@ -1,0 +1,10 @@
+{
+  "id": "adapter_rag",
+  "kind": "semantic",
+  "transport": "local",
+  "version": "0.1.0",
+  "artifact_hash": "sha256:dev",
+  "subscribes": ["quantum.state"],
+  "publishes": ["rag.result"],
+  "capabilities": ["retrieval", "agent_log_panel"]
+}

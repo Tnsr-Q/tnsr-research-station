@@ -1,0 +1,17 @@
+[workspace]
+members = [
+  "crates/runtime-core",
+  "crates/plugin-registry",
+  "crates/artifact-ledger",
+  "crates/bridge-browser",
+  "crates/bridge-gpui",
+  "crates/adapter-quantum",
+  "crates/adapter-rag",
+  "crates/station-kernel"
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+version = "0.1.0"
