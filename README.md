@@ -59,15 +59,18 @@ PluginManifest
   -> JsonlReplayLog seals event into hash chain
   -> browser / GPUI bridges render projections
   -> station_run writes run manifest
+```
 
 A successful kernel run creates a closed run folder:
 
+```text
 runs/<run_id>/
   events.jsonl
   manifest.json
+```
 
-events.jsonl is the append-only replay log.
-manifest.json is the run closure artifact summarizing replay verification, plugins, schemas, and artifacts.
+`events.jsonl` is the append-only replay log.
+`manifest.json` is the run closure artifact summarizing replay verification, plugins, schemas, and artifacts.
 
 ## Features and Components
 
@@ -202,7 +205,7 @@ pub trait Transport {
 }
 ```
 
-**Implemented Transports:**
+**Implemented transport interfaces / stubs:**
 
 1. **LocalTransport** - In-memory transport for testing and local execution
    - Collects events in a vector
@@ -213,32 +216,31 @@ pub trait Transport {
    - Useful for benchmarking
    - Testing scenarios where delivery is not needed
 
-3. **SubprocessTransport** - Spawns subprocess and sends events via stdin
-   - JSON-encoded `EventEnvelope` objects
-   - Subprocess reads from stdin
-   - Supports command and arguments
+3. **SubprocessTransport** - Stateful skeleton for subprocess transport
+   - Command/config state is captured
+   - Real process spawn/send wiring is not integrated yet
 
-4. **WebSocketTransport** - Sends events to WebSocket endpoint
-   - JSON-encoded events as text frames
-   - Real-time bidirectional communication
+4. **WebSocketTransport** - Stateful skeleton for WebSocket transport
+   - Endpoint/config state is captured
+   - Real socket connect/send wiring is not integrated yet
 
-5. **GrpcTransport** - Sends events via gRPC protocol
-   - Protobuf message encoding
-   - High-performance RPC
+5. **GrpcTransport** - Stateful skeleton for gRPC transport
+   - Service/config state is captured
+   - Real RPC connect/send wiring is not integrated yet
 
-6. **ConnectRpcTransport** - Connect RPC protocol (HTTP/1.1, HTTP/2, HTTP/3)
-   - Modern RPC protocol
-   - Browser-compatible
+6. **ConnectRpcTransport** - Stateful skeleton for Connect RPC transport
+   - Service/config state is captured
+   - Real connect/send wiring is not integrated yet
 
-7. **Pyro5Transport** - Python Pyro5 object server integration
-   - Remote Python objects
-   - Cross-language plugin support
+7. **Pyro5Transport** - Stateful skeleton for Pyro5 transport
+   - Target/config state is captured
+   - Real remote object connection/send wiring is not integrated yet
 
-8. **FfiTransport** - Foreign Function Interface (FFI) for native libraries
-   - Direct C/C++ library calls
-   - Low-level integration
+8. **FfiTransport** - Stateful skeleton for FFI transport
+   - Library/config state is captured
+   - Real FFI invocation wiring is not integrated yet
 
-**Status:** Skeleton implementations complete. Full transport runtime integration is next.
+**Status:** Skeleton implementations are present. Transport startup/routing is not yet integrated into `station-kernel`.
 
 ---
 
@@ -341,36 +343,44 @@ pub trait Transport {
 **Executable proof-of-life** for the Rust backbone.
 
 Current kernel behavior:
+- Initializes telemetry.
+- Creates a supervisor session and run ID.
+- Creates `runs/<run_id>/`.
+- Registers the quantum plugin.
+- Emits supervisor lifecycle events.
+- Opens `events.jsonl`.
+- Registers the `quantum.state` schema.
+- Builds and admits a quantum event through policy.
+- Records payload provenance through ArtifactLedger.
+- Publishes the event on EventBus.
+- Appends the received event to replay.
+- Verifies the replay chain.
+- Writes `manifest.json`.
+- Prints browser and GPUI projections.
 
-Initializes telemetry.
-Creates a supervisor session and run ID.
-Creates runs/<run_id>/.
-Registers the quantum plugin.
-Emits supervisor lifecycle events.
-Opens events.jsonl.
-Registers the quantum.state schema.
-Builds and admits a quantum event through policy.
-Records payload provenance through ArtifactLedger.
-Publishes the event on EventBus.
-Appends the received event to replay.
-Verifies the replay chain.
-Writes manifest.json.
-Prints browser and GPUI projections.
-Run example
+Run example:
+
+```bash
 cargo run -p station_kernel
+```
 
 Expected output includes a run folder similar to:
 
+```text
 runs/run-<ulid>/
   events.jsonl
   manifest.json
+```
 
 Inspect the generated manifest:
 
+```bash
 cat runs/<run_id>/manifest.json
+```
 
 The manifest should include:
 
+```json
 {
   "status": "completed",
   "event_log_path": "events.jsonl",
@@ -397,11 +407,15 @@ The manifest should include:
     }
   ]
 }
+```
 
 Exact hashes, timestamps, and run IDs will differ between runs.
 
-Test
+Test:
+
+```bash
 cargo test --workspace
+```
 Core invariants
 Event invariants
 
@@ -509,7 +523,7 @@ The manifest stores relative paths so the run folder can be moved as a sealed ar
 All initially planned PRs have been implemented:
 
 - ✓ **PR 13** — Transport trait skeleton with `LocalTransport` and `NullTransport`
-- ✓ **PR 14** — Six additional transport implementations:
+- ✓ **PR 14** — Six additional transport skeletons:
   - SubprocessTransport
   - WebSocketTransport
   - GrpcTransport
@@ -522,9 +536,10 @@ All initially planned PRs have been implemented:
 - EventBus is still broadcast-to-all, not topic-aware
 - Policy denial is not yet replayed as evidence
 - Schema validation is required-fields only, not typed fields
+- `schemas/quantum-state.schema.json` currently reflects forward-looking typed fields; runtime validation is still Rust-side required-field presence only
 - Artifact ledger records are in-memory during the demo path
 - Plugin manifests are constructed in code, not loaded from files
-- No real transport runtime exists yet (skeleton implementations only)
+- No real transport runtime exists yet (skeletons only), and transport startup/routing is not yet integrated into `station-kernel`
 - Browser and GPUI bridges are projection-only
 - station-kernel is still a proof-of-life executable, not a full runtime scheduler
 
