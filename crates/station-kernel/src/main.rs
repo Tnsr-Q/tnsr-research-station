@@ -44,6 +44,72 @@ fn transport_kind_wire(kind: &TransportKind) -> &'static str {
     }
 }
 
+fn build_plugin_summaries(registry: &PluginRegistry) -> Vec<PluginSummary> {
+    let mut plugins: Vec<PluginSummary> = registry
+        .plugins()
+        .into_iter()
+        .map(|m| PluginSummary {
+            id: m.id.clone(),
+            kind: plugin_kind_wire(&m.kind).into(),
+            transport: transport_kind_wire(&m.transport).into(),
+            version: m.version.clone(),
+            artifact_hash: m.artifact_hash.clone(),
+            publishes: m.publishes.clone(),
+            subscribes: m.subscribes.clone(),
+            capabilities: m.capabilities.clone(),
+        })
+        .collect();
+    plugins.sort_by(|a, b| a.id.cmp(&b.id));
+    plugins
+}
+
+fn build_schema_summaries(schemas: &SchemaRegistry) -> Vec<SchemaSummary> {
+    let mut schema_summaries: Vec<SchemaSummary> = schemas
+        .schemas()
+        .into_iter()
+        .map(|s| SchemaSummary {
+            id: s.id.clone(),
+            topic: s.topic.clone(),
+            version: s.version.clone(),
+            schema_hash: s.schema_hash.clone(),
+            required_fields: s
+                .required_fields
+                .iter()
+                .map(|(name, field_type)| {
+                    let type_str = match field_type {
+                        FieldType::Integer => "Integer",
+                        FieldType::Number => "Number",
+                        FieldType::String => "String",
+                    };
+                    (name.clone(), type_str.to_string())
+                })
+                .collect(),
+        })
+        .collect();
+    schema_summaries.sort_by(|a, b| a.topic.cmp(&b.topic));
+    schema_summaries
+}
+
+fn build_artifact_summaries(ledger: &ArtifactLedger) -> Vec<ArtifactSummary> {
+    let mut artifacts: Vec<ArtifactSummary> = ledger
+        .records()
+        .iter()
+        .map(|r| ArtifactSummary {
+            artifact_id: r.artifact_id.clone(),
+            source: r.source.clone(),
+            hash: r.hash.clone(),
+            algorithm: r.algorithm.clone(),
+            byte_len: r.byte_len,
+            content_type: r.content_type.clone(),
+            trace_id: r.trace_id.clone(),
+            parent_hash: r.parent_hash.clone(),
+            schema_hash: r.schema_hash.clone(),
+        })
+        .collect();
+    artifacts.sort_by(|a, b| a.artifact_id.cmp(&b.artifact_id));
+    artifacts
+}
+
 fn main() {
     station_telemetry::init();
     if let Err(err) = run() {
@@ -137,45 +203,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Err(err) => (0, None, Some(err.to_string())),
         };
 
-        let mut plugins: Vec<PluginSummary> = registry
-            .plugins()
-            .into_iter()
-            .map(|m| PluginSummary {
-                id: m.id.clone(),
-                kind: plugin_kind_wire(&m.kind).into(),
-                transport: transport_kind_wire(&m.transport).into(),
-                version: m.version.clone(),
-                artifact_hash: m.artifact_hash.clone(),
-                publishes: m.publishes.clone(),
-                subscribes: m.subscribes.clone(),
-                capabilities: m.capabilities.clone(),
-            })
-            .collect();
-        plugins.sort_by(|a, b| a.id.cmp(&b.id));
-
-        let mut schema_summaries: Vec<SchemaSummary> = schemas
-            .schemas()
-            .into_iter()
-            .map(|s| SchemaSummary {
-                id: s.id.clone(),
-                topic: s.topic.clone(),
-                version: s.version.clone(),
-                schema_hash: s.schema_hash.clone(),
-                required_fields: s
-                    .required_fields
-                    .iter()
-                    .map(|(name, field_type)| {
-                        let type_str = match field_type {
-                            FieldType::Integer => "Integer",
-                            FieldType::Number => "Number",
-                            FieldType::String => "String",
-                        };
-                        (name.clone(), type_str.to_string())
-                    })
-                    .collect(),
-            })
-            .collect();
-        schema_summaries.sort_by(|a, b| a.topic.cmp(&b.topic));
+        let plugins = build_plugin_summaries(&registry);
+        let schema_summaries = build_schema_summaries(&schemas);
 
         let replay_valid = verification_error.is_none();
 
@@ -236,63 +265,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Err(err) => (0, None, Some(err.to_string())),
         };
 
-    // 10a. Sort Summaries for Determinism
-    let mut plugins: Vec<PluginSummary> = registry
-        .plugins()
-        .into_iter()
-        .map(|m| PluginSummary {
-            id: m.id.clone(),
-            kind: plugin_kind_wire(&m.kind).into(),
-            transport: transport_kind_wire(&m.transport).into(),
-            version: m.version.clone(),
-            artifact_hash: m.artifact_hash.clone(),
-            publishes: m.publishes.clone(),
-            subscribes: m.subscribes.clone(),
-            capabilities: m.capabilities.clone(),
-        })
-        .collect();
-    plugins.sort_by(|a, b| a.id.cmp(&b.id));
-
-    let mut schema_summaries: Vec<SchemaSummary> = schemas
-        .schemas()
-        .into_iter()
-        .map(|s| SchemaSummary {
-            id: s.id.clone(),
-            topic: s.topic.clone(),
-            version: s.version.clone(),
-            schema_hash: s.schema_hash.clone(),
-            required_fields: s
-                .required_fields
-                .iter()
-                .map(|(name, field_type)| {
-                    let type_str = match field_type {
-                        FieldType::Integer => "Integer",
-                        FieldType::Number => "Number",
-                        FieldType::String => "String",
-                    };
-                    (name.clone(), type_str.to_string())
-                })
-                .collect(),
-        })
-        .collect();
-    schema_summaries.sort_by(|a, b| a.topic.cmp(&b.topic));
-
-    let mut artifacts: Vec<ArtifactSummary> = ledger
-        .records()
-        .iter()
-        .map(|r| ArtifactSummary {
-            artifact_id: r.artifact_id.clone(),
-            source: r.source.clone(),
-            hash: r.hash.clone(),
-            algorithm: r.algorithm.clone(),
-            byte_len: r.byte_len,
-            content_type: r.content_type.clone(),
-            trace_id: r.trace_id.clone(),
-            parent_hash: r.parent_hash.clone(),
-            schema_hash: r.schema_hash.clone(),
-        })
-        .collect();
-    artifacts.sort_by(|a, b| a.artifact_id.cmp(&b.artifact_id));
+    let plugins = build_plugin_summaries(&registry);
+    let schema_summaries = build_schema_summaries(&schemas);
+    let artifacts = build_artifact_summaries(&ledger);
 
     let replay_valid = verification_error.is_none();
 
