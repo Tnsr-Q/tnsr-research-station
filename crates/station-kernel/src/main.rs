@@ -107,7 +107,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     schemas.register(quantum_state_schema)?;
 
     // 6. Run Event
-    let rx = bus.subscribe();
+    let rx = bus.subscribe("quantum.state");
     let mut event = quantum_state_event(run_id.clone());
 
     let policy = PolicyEngine {

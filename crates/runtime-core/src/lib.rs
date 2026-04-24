@@ -26,6 +26,7 @@ pub struct PublishReport {
     pub attempted: usize,
     pub delivered: usize,
     pub failed: usize,
+    pub skipped: usize,
 }
 
 fn now_ms() -> u128 {
@@ -87,37 +88,85 @@ impl EventEnvelope {
     }
 }
 
+enum SubscriptionFilter {
+    Exact(String),
+    Prefix(String),
+}
+
+impl SubscriptionFilter {
+    fn matches(&self, topic: &str) -> bool {
+        match self {
+            SubscriptionFilter::Exact(pattern) => topic == pattern,
+            SubscriptionFilter::Prefix(prefix) => topic.starts_with(prefix),
+        }
+    }
+}
+
+struct Subscription {
+    filter: SubscriptionFilter,
+    sender: Sender<EventEnvelope>,
+}
+
 pub struct EventBus {
-    subscribers: Vec<Sender<EventEnvelope>>,
+    subscriptions: Vec<Subscription>,
 }
 
 impl EventBus {
     pub fn new() -> Self {
         Self {
-            subscribers: Vec::new(),
+            subscriptions: Vec::new(),
         }
     }
 
-    pub fn subscribe(&mut self) -> Receiver<EventEnvelope> {
+    pub fn subscribe(&mut self, topic: impl Into<String>) -> Receiver<EventEnvelope> {
         let (tx, rx) = mpsc::channel();
-        self.subscribers.push(tx);
+        self.subscriptions.push(Subscription {
+            filter: SubscriptionFilter::Exact(topic.into()),
+            sender: tx,
+        });
         rx
     }
 
-    pub fn publish(&self, event: EventEnvelope) -> PublishReport {
-        let attempted = self.subscribers.len();
-        let mut delivered = 0;
+    pub fn subscribe_prefix(&mut self, prefix: impl Into<String>) -> Receiver<EventEnvelope> {
+        let (tx, rx) = mpsc::channel();
+        self.subscriptions.push(Subscription {
+            filter: SubscriptionFilter::Prefix(prefix.into()),
+            sender: tx,
+        });
+        rx
+    }
 
-        for tx in &self.subscribers {
-            if tx.send(event.clone()).is_ok() {
-                delivered += 1;
+    pub fn publish(&mut self, event: EventEnvelope) -> PublishReport {
+        let mut attempted = 0;
+        let mut delivered = 0;
+        let mut failed = 0;
+        let mut skipped = 0;
+
+        // Filter and deliver to matching subscribers, prune dead ones
+        self.subscriptions.retain(|sub| {
+            if sub.filter.matches(&event.topic) {
+                attempted += 1;
+                match sub.sender.send(event.clone()) {
+                    Ok(_) => {
+                        delivered += 1;
+                        true // Keep alive subscriber
+                    }
+                    Err(_) => {
+                        failed += 1;
+                        false // Prune dead subscriber
+                    }
+                }
+            } else {
+                skipped += 1;
+                true // Keep non-matching subscriber
             }
-        }
+        });
 
         PublishReport {
             attempted,
             delivered,
-            failed: attempted.saturating_sub(delivered),
+            failed,
+            skipped,
         }
     }
 }
@@ -191,8 +240,8 @@ mod tests {
     #[test]
     fn test_publish_report_counts_delivery() {
         let mut bus = EventBus::new();
-        let rx_live = bus.subscribe();
-        let rx_dropped = bus.subscribe();
+        let rx_live = bus.subscribe("quantum.state");
+        let rx_dropped = bus.subscribe("quantum.state");
         drop(rx_dropped);
 
         let event = EventEnvelope::new(
@@ -206,9 +255,128 @@ mod tests {
         assert_eq!(report.attempted, 2);
         assert_eq!(report.delivered, 1);
         assert_eq!(report.failed, 1);
+        assert_eq!(report.skipped, 0);
 
         let _received = rx_live
             .recv()
             .expect("live subscriber should receive event");
+    }
+
+    #[test]
+    fn test_exact_topic_matching() {
+        let mut bus = EventBus::new();
+        let rx_quantum = bus.subscribe("quantum.state");
+        let rx_supervisor = bus.subscribe("supervisor.registered");
+
+        let event = EventEnvelope::new(
+            "session-a",
+            "quantum.state",
+            "adapter_quantum",
+            json!({ "n": 1 }),
+        );
+        let report = bus.publish(event);
+
+        assert_eq!(report.attempted, 1);
+        assert_eq!(report.delivered, 1);
+        assert_eq!(report.failed, 0);
+        assert_eq!(report.skipped, 1);
+
+        assert!(rx_quantum.try_recv().is_ok());
+        assert!(rx_supervisor.try_recv().is_err());
+    }
+
+    #[test]
+    fn test_prefix_matching() {
+        let mut bus = EventBus::new();
+        let rx_prefix = bus.subscribe_prefix("supervisor.");
+        let rx_exact = bus.subscribe("quantum.state");
+
+        let event1 = EventEnvelope::new(
+            "session-a",
+            "supervisor.registered",
+            "supervisor",
+            json!({ "plugin": "test" }),
+        );
+        let report1 = bus.publish(event1);
+
+        assert_eq!(report1.attempted, 1);
+        assert_eq!(report1.delivered, 1);
+        assert_eq!(report1.failed, 0);
+        assert_eq!(report1.skipped, 1);
+
+        let event2 = EventEnvelope::new(
+            "session-a",
+            "supervisor.admitted",
+            "supervisor",
+            json!({ "plugin": "test" }),
+        );
+        let report2 = bus.publish(event2);
+
+        assert_eq!(report2.attempted, 1);
+        assert_eq!(report2.delivered, 1);
+        assert_eq!(report2.skipped, 1);
+
+        assert_eq!(rx_prefix.try_recv().unwrap().topic, "supervisor.registered");
+        assert_eq!(rx_prefix.try_recv().unwrap().topic, "supervisor.admitted");
+        assert!(rx_exact.try_recv().is_err());
+    }
+
+    #[test]
+    fn test_dead_subscribers_are_pruned() {
+        let mut bus = EventBus::new();
+        let rx1 = bus.subscribe("quantum.state");
+        let rx2 = bus.subscribe("quantum.state");
+
+        drop(rx2); // Drop one subscriber
+
+        let event1 = EventEnvelope::new(
+            "session-a",
+            "quantum.state",
+            "adapter_quantum",
+            json!({ "n": 1 }),
+        );
+        let report1 = bus.publish(event1);
+
+        assert_eq!(report1.attempted, 2);
+        assert_eq!(report1.delivered, 1);
+        assert_eq!(report1.failed, 1);
+
+        // Second publish should only attempt delivery to 1 subscriber (pruned)
+        let event2 = EventEnvelope::new(
+            "session-a",
+            "quantum.state",
+            "adapter_quantum",
+            json!({ "n": 2 }),
+        );
+        let report2 = bus.publish(event2);
+
+        assert_eq!(report2.attempted, 1);
+        assert_eq!(report2.delivered, 1);
+        assert_eq!(report2.failed, 0);
+
+        drop(rx1);
+    }
+
+    #[test]
+    fn test_unmatched_subscribers_receive_nothing() {
+        let mut bus = EventBus::new();
+        let rx_quantum = bus.subscribe("quantum.state");
+        let rx_supervisor = bus.subscribe("supervisor.registered");
+
+        let event = EventEnvelope::new(
+            "session-a",
+            "rag.query",
+            "adapter_rag",
+            json!({ "text": "test" }),
+        );
+        let report = bus.publish(event);
+
+        assert_eq!(report.attempted, 0);
+        assert_eq!(report.delivered, 0);
+        assert_eq!(report.failed, 0);
+        assert_eq!(report.skipped, 2);
+
+        assert!(rx_quantum.try_recv().is_err());
+        assert!(rx_supervisor.try_recv().is_err());
     }
 }
