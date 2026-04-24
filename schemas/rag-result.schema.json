@@ -1,0 +1,8 @@
+{
+  "id": "tnsr.rag.result.v1",
+  "topic": "rag.result",
+  "version": "1",
+  "required_fields": [
+    ["message", "String"]
+  ]
+}

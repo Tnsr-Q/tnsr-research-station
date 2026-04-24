@@ -9,6 +9,7 @@ use std::path::Path;
 pub enum FieldType {
     Integer,
     Number,
+    String,
 }
 
 #[derive(Debug, Clone)]
@@ -170,6 +171,7 @@ fn matches_type(value: &Value, expected_type: &FieldType) -> bool {
     match expected_type {
         FieldType::Integer => value.is_i64() || value.is_u64(),
         FieldType::Number => value.is_f64() || value.is_i64() || value.is_u64(),
+        FieldType::String => value.is_string(),
     }
 }
 
@@ -202,6 +204,7 @@ pub fn load_schema_json(path: impl AsRef<Path>) -> Result<PayloadSchema, SchemaE
         let field_type = match field_type_str.as_str() {
             "Integer" => FieldType::Integer,
             "Number" => FieldType::Number,
+            "String" => FieldType::String,
             _ => return Err(SchemaError::MissingSchema(format!(
                 "Unknown field type: {}",
                 field_type_str
@@ -228,6 +231,7 @@ pub fn write_schema_json(
                 let type_str = match field_type {
                     FieldType::Integer => "Integer",
                     FieldType::Number => "Number",
+                    FieldType::String => "String",
                 };
                 (name.clone(), type_str.to_string())
             })
