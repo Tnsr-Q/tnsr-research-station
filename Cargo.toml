@@ -11,7 +11,8 @@ members = [
   "crates/station-replay",
   "crates/station-supervisor",
   "crates/station-kernel",
-  "crates/station-schema"
+  "crates/station-schema",
+  "crates/station-policy"
 ]
 resolver = "2"
 
