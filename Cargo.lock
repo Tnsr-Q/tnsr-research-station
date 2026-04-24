@@ -392,9 +392,11 @@ dependencies = [
  "plugin_registry",
  "runtime_core",
  "serde_json",
+ "station_replay",
  "station_schema",
  "station_supervisor",
  "thiserror",
+ "ulid",
 ]
 
 [[package]]

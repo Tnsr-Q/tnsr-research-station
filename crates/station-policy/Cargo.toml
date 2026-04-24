@@ -9,7 +9,10 @@ plugin_registry = { path = "../plugin-registry" }
 runtime_core = { path = "../runtime-core" }
 station_schema = { path = "../station-schema" }
 station_supervisor = { path = "../station-supervisor" }
+serde_json = "1"
 thiserror = "1"
 
 [dev-dependencies]
 serde_json = "1"
+station_replay = { path = "../station-replay" }
+ulid = "1"
