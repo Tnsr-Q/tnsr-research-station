@@ -66,6 +66,7 @@ impl<'a> PolicyEngine<'a> {
             "source": event.source.clone(),
             "topic": event.topic.clone(),
             "event_id": event.event_id.clone(),
+            "trace_id": event.trace_id.clone(),
         });
 
         if let Some(reason) = reason {
@@ -117,11 +118,19 @@ impl<'a> PolicyEngine<'a> {
 
         // 5. Attach schema hash if missing.
         if event.schema_hash.is_none() {
-            self.schemas.attach_schema_hash(event)?;
+            if let Err(err) = self.schemas.attach_schema_hash(event) {
+                let reason = format!("schema hash attachment failed: {err}");
+                let policy_event = self.create_policy_event(event, false, Some(&reason));
+                return Ok(EventAdmission::denied(reason, policy_event));
+            }
         }
 
         // 6. Validate payload.
-        self.schemas.validate(event)?;
+        if let Err(err) = self.schemas.validate(event) {
+            let reason = format!("schema validation failed: {err}");
+            let policy_event = self.create_policy_event(event, false, Some(&reason));
+            return Ok(EventAdmission::denied(reason, policy_event));
+        }
 
         // 7. Create admission policy event and return allowed.
         let policy_event = self.create_policy_event(event, true, None);
