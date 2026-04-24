@@ -3,7 +3,7 @@
   "kind": "semantic",
   "transport": "local",
   "version": "0.1.0",
-  "artifact_hash": "sha256:dev",
+  "artifact_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "subscribes": ["quantum.state"],
   "publishes": ["rag.result"],
   "capabilities": ["retrieval", "agent_log_panel"]

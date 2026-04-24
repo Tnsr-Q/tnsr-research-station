@@ -3,7 +3,7 @@
   "kind": "compute",
   "transport": "local",
   "version": "0.1.0",
-  "artifact_hash": "sha256:dev",
+  "artifact_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "subscribes": ["quantum.analyze"],
   "publishes": ["quantum.state"],
   "capabilities": ["collapse_ratio", "euler_characteristic", "galois_order"]
