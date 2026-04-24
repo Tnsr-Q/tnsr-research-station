@@ -1,0 +1,61 @@
+{
+  "run_id": "run-01KQ0AG8F8Y00P4MD5ZHS28RF3",
+  "profile_name": "default",
+  "status": "completed",
+  "event_log_path": "events.jsonl",
+  "manifest_path": "manifest.json",
+  "started_at_ms": 1777053737448,
+  "completed_at_ms": 1777053737450,
+  "records_verified": 4,
+  "last_record_hash": "fe1966a93845cf9dd737d86a3ac82dd000670139af348cc0a2a274122af4e330",
+  "replay_valid": true,
+  "verification_error": null,
+  "plugin_count": 1,
+  "schema_count": 1,
+  "artifact_count": 1,
+  "plugins": [
+    {
+      "id": "adapter_quantum",
+      "kind": "compute",
+      "transport": "local",
+      "version": "0.1.0",
+      "artifact_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "publishes": [
+        "quantum.state"
+      ],
+      "subscribes": [
+        "quantum.analyze"
+      ],
+      "capabilities": [
+        "collapse_ratio",
+        "euler_characteristic"
+      ]
+    }
+  ],
+  "schemas": [
+    {
+      "id": "tnsr.quantum.state.v1",
+      "topic": "quantum.state",
+      "version": "1",
+      "schema_hash": "sha256:78bc6e33c2806569fac82f0c22e97c4d394935cbfe85347d1891220188489513",
+      "required_fields": [
+        "state_dim",
+        "collapse_ratio",
+        "euler_characteristic"
+      ]
+    }
+  ],
+  "artifacts": [
+    {
+      "artifact_id": "quantum_state_payload",
+      "source": "adapter_quantum",
+      "hash": "sha256:bc84ef86df582d11f8dca664757655ea79d5610f3e2fd93001fcb50487ec5883",
+      "algorithm": "sha256",
+      "byte_len": 63,
+      "content_type": "application/json",
+      "trace_id": "trace-01KQ0AG8F9A6W0RMW91WKBHRDP",
+      "parent_hash": null,
+      "schema_hash": "sha256:78bc6e33c2806569fac82f0c22e97c4d394935cbfe85347d1891220188489513"
+    }
+  ]
+}
