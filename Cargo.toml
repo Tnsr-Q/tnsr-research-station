@@ -13,7 +13,8 @@ members = [
   "crates/station-kernel",
   "crates/station-schema",
   "crates/station-policy",
-  "crates/station-run"
+  "crates/station-run",
+  "crates/station-transport"
 ]
 resolver = "2"
 
