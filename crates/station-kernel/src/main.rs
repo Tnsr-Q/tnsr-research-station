@@ -12,7 +12,7 @@ use station_replay::JsonlReplayLog;
 use station_run::{
     write_manifest_json, ArtifactSummary, PluginSummary, RunManifest, RunStatus, SchemaSummary,
 };
-use station_schema::{PayloadSchema, SchemaRegistry};
+use station_schema::{FieldType, PayloadSchema, SchemaRegistry};
 use station_supervisor::{PluginRuntimeState, StationSupervisor};
 
 fn now_ms() -> Result<u128, std::time::SystemTimeError> {
@@ -94,16 +94,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     replay.append_record(&admitted_event)?;
 
     // 5. Register Schema
-    let quantum_state_schema = PayloadSchema::new(
-        "tnsr.quantum.state.v1",
-        "quantum.state",
-        "1",
-        vec![
-            "state_dim".into(),
-            "collapse_ratio".into(),
-            "euler_characteristic".into(),
-        ],
-    );
+    let quantum_state_schema = PayloadSchema::new("tnsr.quantum.state.v1", "quantum.state", "1")
+        .required("state_dim", FieldType::Integer)
+        .required("collapse_ratio", FieldType::Number)
+        .required("euler_characteristic", FieldType::Integer)
+        .build();
     schemas.register(quantum_state_schema)?;
 
     // 6. Run Event
@@ -160,7 +155,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 topic: s.topic.clone(),
                 version: s.version.clone(),
                 schema_hash: s.schema_hash.clone(),
-                required_fields: s.required_fields.clone(),
+                required_fields: s
+                    .required_fields
+                    .iter()
+                    .map(|(name, field_type)| {
+                        let type_str = match field_type {
+                            FieldType::Integer => "Integer",
+                            FieldType::Number => "Number",
+                        };
+                        (name.clone(), type_str.to_string())
+                    })
+                    .collect(),
             })
             .collect();
         schema_summaries.sort_by(|a, b| a.topic.cmp(&b.topic));
@@ -248,7 +253,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             topic: s.topic.clone(),
             version: s.version.clone(),
             schema_hash: s.schema_hash.clone(),
-            required_fields: s.required_fields.clone(),
+            required_fields: s
+                .required_fields
+                .iter()
+                .map(|(name, field_type)| {
+                    let type_str = match field_type {
+                        FieldType::Integer => "Integer",
+                        FieldType::Number => "Number",
+                    };
+                    (name.clone(), type_str.to_string())
+                })
+                .collect(),
         })
         .collect();
     schema_summaries.sort_by(|a, b| a.topic.cmp(&b.topic));

@@ -29,7 +29,7 @@ pub struct SchemaSummary {
     pub topic: String,
     pub version: String,
     pub schema_hash: String,
-    pub required_fields: Vec<String>,
+    pub required_fields: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -134,7 +134,7 @@ mod tests {
     use super::*;
     use plugin_registry::{PluginKind, PluginManifest, TransportKind};
     use serde_json::json;
-    use station_schema::PayloadSchema;
+    use station_schema::{FieldType, PayloadSchema};
 
     fn manifest() -> PluginManifest {
         PluginManifest {
@@ -152,16 +152,11 @@ mod tests {
     }
 
     fn schema() -> PayloadSchema {
-        PayloadSchema::new(
-            "tnsr.quantum.state.v1",
-            "quantum.state",
-            "1",
-            vec![
-                "state_dim".to_string(),
-                "collapse_ratio".to_string(),
-                "euler_characteristic".to_string(),
-            ],
-        )
+        PayloadSchema::new("tnsr.quantum.state.v1", "quantum.state", "1")
+            .required("state_dim", FieldType::Integer)
+            .required("collapse_ratio", FieldType::Number)
+            .required("euler_characteristic", FieldType::Integer)
+            .build()
     }
 
     #[test]
