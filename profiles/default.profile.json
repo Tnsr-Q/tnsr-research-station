@@ -1,0 +1,11 @@
+{
+  "name": "default",
+  "description": "Default run profile with quantum and RAG adapters",
+  "plugin_manifests": [
+    "plugins/quantum-hybrid.plugin.json",
+    "plugins/rag.plugin.json"
+  ],
+  "schema_files": [
+    "schemas/quantum-state.schema.json"
+  ]
+}

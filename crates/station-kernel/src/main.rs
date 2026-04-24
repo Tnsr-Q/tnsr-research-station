@@ -5,14 +5,14 @@ use adapter_quantum::quantum_state_event;
 use artifact_ledger::{ArtifactLedger, ArtifactRecordRequest};
 use bridge_browser::to_browser_frame;
 use bridge_gpui::to_gpui_overlay_line;
-use plugin_registry::{PluginKind, PluginManifest, PluginRegistry, TransportKind};
+use plugin_registry::{load_plugin_manifest_json, PluginKind, PluginRegistry, TransportKind};
 use runtime_core::EventBus;
 use station_policy::PolicyEngine;
 use station_replay::JsonlReplayLog;
 use station_run::{
-    write_manifest_json, ArtifactSummary, PluginSummary, RunManifest, RunStatus, SchemaSummary,
+    load_run_profile_json, write_manifest_json, ArtifactSummary, PluginSummary, RunManifest, RunStatus, SchemaSummary,
 };
-use station_schema::{FieldType, PayloadSchema, SchemaRegistry};
+use station_schema::{load_schema_json, FieldType, SchemaRegistry};
 use station_supervisor::{PluginRuntimeState, StationSupervisor};
 
 fn now_ms() -> Result<u128, std::time::SystemTimeError> {
@@ -27,6 +27,7 @@ fn plugin_kind_wire(kind: &PluginKind) -> &'static str {
         PluginKind::Memory => "memory",
         PluginKind::Agent => "agent",
         PluginKind::Verifier => "verifier",
+        PluginKind::Semantic => "semantic",
     }
 }
 
@@ -54,14 +55,20 @@ fn main() {
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let started_at_ms = now_ms()?;
 
-    // 1. Initialize components with correct constructors
+    // 1. Load run profile
+    let profile_path = std::env::var("TNSR_PROFILE")
+        .unwrap_or_else(|_| "profiles/default.profile.json".to_string());
+    let profile = load_run_profile_json(&profile_path)?;
+    println!("Loaded profile: {}", profile.name);
+
+    // 2. Initialize components
     let mut registry = PluginRegistry::default();
     let mut schemas = SchemaRegistry::default();
     let mut ledger = ArtifactLedger::default();
     let mut bus = EventBus::new();
 
-    // 2. Setup Supervisor & Run Identity
-    let mut supervisor = StationSupervisor::new("default");
+    // 3. Setup Supervisor & Run Identity
+    let mut supervisor = StationSupervisor::new(&profile.name);
     let run_id = supervisor.session.run_id.clone();
     let profile_name = supervisor.session.profile_name.clone();
 
@@ -69,39 +76,38 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let events_path = run_dir.join("events.jsonl");
     let manifest_path = run_dir.join("manifest.json");
 
-    // 3. Register Plugin & Supervisor Events
-    let quantum_manifest = PluginManifest {
-        id: "adapter_quantum".into(),
-        kind: PluginKind::Compute,
-        transport: TransportKind::Local,
-        version: "0.1.0".into(),
-        artifact_hash: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
-        subscribes: vec!["quantum.analyze".into()],
-        publishes: vec!["quantum.state".into()],
-        capabilities: vec!["collapse_ratio".into(), "euler_characteristic".into()],
-    };
+    // 4. Load and register plugins from profile
+    let mut plugin_manifests = Vec::new();
+    for plugin_path in &profile.plugin_manifests {
+        let manifest = load_plugin_manifest_json(plugin_path)?;
+        println!("Loading plugin: {} from {}", manifest.id, plugin_path);
+        plugin_manifests.push(manifest);
+    }
 
-    registry
-        .register(quantum_manifest.clone())
-        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?;
-
-    let supervisor_event = supervisor.register_plugin(&quantum_manifest)?;
-    let admitted_event = supervisor.transition("adapter_quantum", PluginRuntimeState::Admitted)?;
-
-    // 4. Open Replay Log & Write Supervisor Events
+    // 5. Open Replay Log
     let mut replay = JsonlReplayLog::open(&events_path)?;
-    replay.append_record(&supervisor_event)?;
-    replay.append_record(&admitted_event)?;
 
-    // 5. Register Schema
-    let quantum_state_schema = PayloadSchema::new("tnsr.quantum.state.v1", "quantum.state", "1")
-        .required("state_dim", FieldType::Integer)
-        .required("collapse_ratio", FieldType::Number)
-        .required("euler_characteristic", FieldType::Integer)
-        .build();
-    schemas.register(quantum_state_schema)?;
+    // 6. Register plugins and write supervisor events
+    for manifest in &plugin_manifests {
+        registry
+            .register(manifest.clone())
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?;
 
-    // 6. Run Event
+        let supervisor_event = supervisor.register_plugin(manifest)?;
+        replay.append_record(&supervisor_event)?;
+
+        let admitted_event = supervisor.transition(&manifest.id, PluginRuntimeState::Admitted)?;
+        replay.append_record(&admitted_event)?;
+    }
+
+    // 7. Load and register schemas from profile
+    for schema_path in &profile.schema_files {
+        let schema = load_schema_json(schema_path)?;
+        println!("Loading schema: {} from {}", schema.id, schema_path);
+        schemas.register(schema)?;
+    }
+
+    // 8. Run Event
     let rx = bus.subscribe("quantum.state");
     let mut event = quantum_state_event(run_id.clone());
 
@@ -215,20 +221,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let received = rx.recv()?;
     replay.append_record(&received)?;
 
-    // 7. Bridges
+    // 9. Bridges
     let browser_frame = to_browser_frame(&received)?;
     println!("browser frame: {browser_frame}");
     println!("gpui line: {}", to_gpui_overlay_line(&received));
     println!("ledger entries: {}", ledger.records().len());
 
-    // 8. Verification & Manifest Generation
+    // 10. Verification & Manifest Generation
     let (records_verified, last_hash, verification_error) =
         match JsonlReplayLog::verify_chain(&events_path) {
             Ok(report) => (report.records_verified, report.last_record_hash, None),
             Err(err) => (0, None, Some(err.to_string())),
         };
 
-    // 8a. Sort Summaries for Determinism
+    // 10a. Sort Summaries for Determinism
     let mut plugins: Vec<PluginSummary> = registry
         .plugins()
         .into_iter()

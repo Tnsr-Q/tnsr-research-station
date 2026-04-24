@@ -1,0 +1,10 @@
+{
+  "id": "tnsr.quantum.state.v1",
+  "topic": "quantum.state",
+  "version": "1",
+  "required_fields": [
+    ["state_dim", "Integer"],
+    ["collapse_ratio", "Number"],
+    ["euler_characteristic", "Integer"]
+  ]
+}

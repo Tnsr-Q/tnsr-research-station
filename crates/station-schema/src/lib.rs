@@ -2,6 +2,8 @@ use runtime_core::EventEnvelope;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum FieldType {
@@ -16,6 +18,14 @@ pub struct PayloadSchema {
     pub version: String,
     pub required_fields: Vec<(String, FieldType)>,
     pub schema_hash: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct SchemaFile {
+    id: String,
+    topic: String,
+    version: String,
+    required_fields: Vec<(String, String)>,
 }
 
 #[derive(Default)]
@@ -178,6 +188,64 @@ fn type_name(value: &Value) -> String {
         Value::Array(_) => "array".to_string(),
         Value::Object(_) => "object".to_string(),
     }
+}
+
+pub fn load_schema_json(path: impl AsRef<Path>) -> Result<PayloadSchema, SchemaError> {
+    let data = fs::read_to_string(path)
+        .map_err(|e| SchemaError::MissingSchema(format!("Failed to read schema file: {}", e)))?;
+    let schema_file: SchemaFile = serde_json::from_str(&data)
+        .map_err(|e| SchemaError::MissingSchema(format!("Failed to parse schema JSON: {}", e)))?;
+
+    let mut builder = PayloadSchema::new(&schema_file.id, &schema_file.topic, &schema_file.version);
+
+    for (field_name, field_type_str) in schema_file.required_fields {
+        let field_type = match field_type_str.as_str() {
+            "Integer" => FieldType::Integer,
+            "Number" => FieldType::Number,
+            _ => return Err(SchemaError::MissingSchema(format!(
+                "Unknown field type: {}",
+                field_type_str
+            ))),
+        };
+        builder = builder.required(field_name, field_type);
+    }
+
+    Ok(builder.build())
+}
+
+pub fn write_schema_json(
+    schema: &PayloadSchema,
+    path: impl AsRef<Path>,
+) -> Result<(), SchemaError> {
+    let schema_file = SchemaFile {
+        id: schema.id.clone(),
+        topic: schema.topic.clone(),
+        version: schema.version.clone(),
+        required_fields: schema
+            .required_fields
+            .iter()
+            .map(|(name, field_type)| {
+                let type_str = match field_type {
+                    FieldType::Integer => "Integer",
+                    FieldType::Number => "Number",
+                };
+                (name.clone(), type_str.to_string())
+            })
+            .collect(),
+    };
+
+    if let Some(parent) = path.as_ref().parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| SchemaError::MissingSchema(format!("Failed to create directory: {}", e)))?;
+    }
+
+    let json = serde_json::to_string_pretty(&schema_file)
+        .map_err(|e| SchemaError::MissingSchema(format!("Failed to serialize schema: {}", e)))?;
+
+    fs::write(path, json)
+        .map_err(|e| SchemaError::MissingSchema(format!("Failed to write schema file: {}", e)))?;
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -351,5 +419,27 @@ mod tests {
 
         // This should pass without error
         registry.validate(&event).expect("valid payload should pass");
+    }
+
+    #[test]
+    fn test_schema_round_trips_json() {
+        let schema = PayloadSchema::new("tnsr.quantum.state.v1", "quantum.state", "1")
+            .required("state_dim", FieldType::Integer)
+            .required("collapse_ratio", FieldType::Number)
+            .required("euler_characteristic", FieldType::Integer)
+            .build();
+
+        let path = std::env::temp_dir().join("tnsr-schema-test.json");
+
+        write_schema_json(&schema, &path).unwrap();
+        let loaded = load_schema_json(&path).unwrap();
+
+        assert_eq!(loaded.id, "tnsr.quantum.state.v1");
+        assert_eq!(loaded.topic, "quantum.state");
+        assert_eq!(loaded.version, "1");
+        assert_eq!(loaded.required_fields.len(), 3);
+        assert_eq!(loaded.schema_hash, schema.schema_hash);
+
+        let _ = std::fs::remove_file(path);
     }
 }

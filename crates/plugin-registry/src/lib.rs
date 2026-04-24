@@ -1,6 +1,10 @@
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::Path;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum PluginKind {
     Compute,
     Renderer,
@@ -8,9 +12,11 @@ pub enum PluginKind {
     Memory,
     Agent,
     Verifier,
+    Semantic,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum TransportKind {
     Local,
     Wasm,
@@ -20,6 +26,21 @@ pub enum TransportKind {
     Pyro5,
     Subprocess,
     Ffi,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum PluginError {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("JSON error: {0}")]
+    Json(#[from] serde_json::Error),
+
+    #[error("Invalid plugin kind: {0}")]
+    InvalidKind(String),
+
+    #[error("Invalid transport: {0}")]
+    InvalidTransport(String),
 }
 
 impl TransportKind {
@@ -38,15 +59,18 @@ impl TransportKind {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginManifest {
     pub id: String,
     pub kind: PluginKind,
     pub transport: TransportKind,
     pub version: String,
     pub artifact_hash: String,
+    #[serde(default)]
     pub subscribes: Vec<String>,
+    #[serde(default)]
     pub publishes: Vec<String>,
+    #[serde(default)]
     pub capabilities: Vec<String>,
 }
 
@@ -124,6 +148,24 @@ impl PluginRegistry {
     }
 }
 
+pub fn load_plugin_manifest_json(path: impl AsRef<Path>) -> Result<PluginManifest, PluginError> {
+    let data = fs::read_to_string(path)?;
+    let manifest = serde_json::from_str(&data)?;
+    Ok(manifest)
+}
+
+pub fn write_plugin_manifest_json(
+    manifest: &PluginManifest,
+    path: impl AsRef<Path>,
+) -> Result<(), PluginError> {
+    if let Some(parent) = path.as_ref().parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string_pretty(manifest)?;
+    fs::write(path, json)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,5 +231,35 @@ mod tests {
 
         assert!(registry.can_subscribe("adapter_quantum", "quantum.analyze"));
         assert!(!registry.can_subscribe("adapter_rag", "quantum.analyze"));
+    }
+
+    #[test]
+    fn test_plugin_manifest_round_trips_json() {
+        let manifest = PluginManifest {
+            id: "adapter_test".to_string(),
+            kind: PluginKind::Compute,
+            transport: TransportKind::Local,
+            version: "0.1.0".to_string(),
+            artifact_hash:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                    .to_string(),
+            subscribes: vec!["test.input".to_string()],
+            publishes: vec!["test.output".to_string()],
+            capabilities: vec!["test_capability".to_string()],
+        };
+
+        let id = ulid::Ulid::new().to_string();
+        let path = std::env::temp_dir().join(format!("tnsr-plugin-manifest-{}.json", id));
+
+        write_plugin_manifest_json(&manifest, &path).unwrap();
+        let loaded = load_plugin_manifest_json(&path).unwrap();
+
+        assert_eq!(loaded.id, "adapter_test");
+        assert_eq!(loaded.kind, PluginKind::Compute);
+        assert_eq!(loaded.transport, TransportKind::Local);
+        assert_eq!(loaded.publishes, vec!["test.output"]);
+        assert_eq!(loaded.subscribes, vec!["test.input"]);
+
+        let _ = std::fs::remove_file(path);
     }
 }
