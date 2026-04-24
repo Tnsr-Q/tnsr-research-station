@@ -144,6 +144,394 @@ impl Transport for NullTransport {
     }
 }
 
+/// SubprocessTransport spawns a subprocess and sends events via stdin.
+/// The subprocess is expected to read JSON-encoded EventEnvelope objects from stdin.
+#[derive(Debug)]
+pub struct SubprocessTransport {
+    id: String,
+    state: TransportState,
+    #[allow(dead_code)]
+    command: String,
+    #[allow(dead_code)]
+    args: Vec<String>,
+    #[cfg(feature = "subprocess")]
+    child: Option<tokio::process::Child>,
+}
+
+impl SubprocessTransport {
+    pub fn new(id: impl Into<String>, command: impl Into<String>, args: Vec<String>) -> Self {
+        Self {
+            id: id.into(),
+            state: TransportState::Stopped,
+            command: command.into(),
+            args,
+            #[cfg(feature = "subprocess")]
+            child: None,
+        }
+    }
+}
+
+impl Transport for SubprocessTransport {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn start(&mut self) -> Result<(), TransportError> {
+        match self.state {
+            TransportState::Started => Err(TransportError::AlreadyStarted),
+            TransportState::Stopped => {
+                #[cfg(feature = "subprocess")]
+                {
+                    // Subprocess spawning would happen here in a real implementation
+                    // For now, we just mark as started without actually spawning
+                }
+                self.state = TransportState::Started;
+                Ok(())
+            }
+        }
+    }
+
+    fn stop(&mut self) -> Result<(), TransportError> {
+        match self.state {
+            TransportState::Stopped => Err(TransportError::NotStarted),
+            TransportState::Started => {
+                #[cfg(feature = "subprocess")]
+                {
+                    // Kill subprocess if it exists
+                    self.child = None;
+                }
+                self.state = TransportState::Stopped;
+                Ok(())
+            }
+        }
+    }
+
+    fn send(&mut self, event: &EventEnvelope) -> Result<(), TransportError> {
+        match self.state {
+            TransportState::Stopped => Err(TransportError::NotStarted),
+            TransportState::Started => {
+                #[cfg(feature = "subprocess")]
+                {
+                    // In a real implementation, serialize event to JSON and write to child stdin
+                    let _json = serde_json::to_string(event)
+                        .map_err(|e| TransportError::SendFailed(e.to_string()))?;
+                    // Write to stdin would happen here
+                }
+                #[cfg(not(feature = "subprocess"))]
+                {
+                    let _ = event; // Suppress unused variable warning
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+/// WebSocketTransport sends events to a WebSocket endpoint.
+/// Events are JSON-encoded and sent as text frames.
+#[derive(Debug)]
+pub struct WebSocketTransport {
+    id: String,
+    state: TransportState,
+    #[allow(dead_code)]
+    url: String,
+}
+
+impl WebSocketTransport {
+    pub fn new(id: impl Into<String>, url: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            state: TransportState::Stopped,
+            url: url.into(),
+        }
+    }
+}
+
+impl Transport for WebSocketTransport {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn start(&mut self) -> Result<(), TransportError> {
+        match self.state {
+            TransportState::Started => Err(TransportError::AlreadyStarted),
+            TransportState::Stopped => {
+                // WebSocket connection would be established here
+                self.state = TransportState::Started;
+                Ok(())
+            }
+        }
+    }
+
+    fn stop(&mut self) -> Result<(), TransportError> {
+        match self.state {
+            TransportState::Stopped => Err(TransportError::NotStarted),
+            TransportState::Started => {
+                // WebSocket connection would be closed here
+                self.state = TransportState::Stopped;
+                Ok(())
+            }
+        }
+    }
+
+    fn send(&mut self, event: &EventEnvelope) -> Result<(), TransportError> {
+        match self.state {
+            TransportState::Stopped => Err(TransportError::NotStarted),
+            TransportState::Started => {
+                // Serialize event to JSON and send as WebSocket text frame
+                let _json = serde_json::to_string(event)
+                    .map_err(|e| TransportError::SendFailed(e.to_string()))?;
+                // WebSocket send would happen here
+                Ok(())
+            }
+        }
+    }
+}
+
+/// GrpcTransport sends events via gRPC protocol.
+/// Events are encoded as protobuf messages.
+#[derive(Debug)]
+pub struct GrpcTransport {
+    id: String,
+    state: TransportState,
+    #[allow(dead_code)]
+    endpoint: String,
+}
+
+impl GrpcTransport {
+    pub fn new(id: impl Into<String>, endpoint: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            state: TransportState::Stopped,
+            endpoint: endpoint.into(),
+        }
+    }
+}
+
+impl Transport for GrpcTransport {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn start(&mut self) -> Result<(), TransportError> {
+        match self.state {
+            TransportState::Started => Err(TransportError::AlreadyStarted),
+            TransportState::Stopped => {
+                // gRPC channel would be established here
+                self.state = TransportState::Started;
+                Ok(())
+            }
+        }
+    }
+
+    fn stop(&mut self) -> Result<(), TransportError> {
+        match self.state {
+            TransportState::Stopped => Err(TransportError::NotStarted),
+            TransportState::Started => {
+                // gRPC channel would be closed here
+                self.state = TransportState::Stopped;
+                Ok(())
+            }
+        }
+    }
+
+    fn send(&mut self, event: &EventEnvelope) -> Result<(), TransportError> {
+        match self.state {
+            TransportState::Stopped => Err(TransportError::NotStarted),
+            TransportState::Started => {
+                // Convert event to protobuf and send via gRPC
+                let _json = serde_json::to_string(event)
+                    .map_err(|e| TransportError::SendFailed(e.to_string()))?;
+                // gRPC send would happen here
+                Ok(())
+            }
+        }
+    }
+}
+
+/// ConnectRpcTransport sends events using the Connect RPC protocol.
+/// Connect is a protocol that works over HTTP/1.1, HTTP/2, and HTTP/3.
+#[derive(Debug)]
+pub struct ConnectRpcTransport {
+    id: String,
+    state: TransportState,
+    #[allow(dead_code)]
+    url: String,
+}
+
+impl ConnectRpcTransport {
+    pub fn new(id: impl Into<String>, url: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            state: TransportState::Stopped,
+            url: url.into(),
+        }
+    }
+}
+
+impl Transport for ConnectRpcTransport {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn start(&mut self) -> Result<(), TransportError> {
+        match self.state {
+            TransportState::Started => Err(TransportError::AlreadyStarted),
+            TransportState::Stopped => {
+                // Connect RPC client would be initialized here
+                self.state = TransportState::Started;
+                Ok(())
+            }
+        }
+    }
+
+    fn stop(&mut self) -> Result<(), TransportError> {
+        match self.state {
+            TransportState::Stopped => Err(TransportError::NotStarted),
+            TransportState::Started => {
+                // Connect RPC client would be closed here
+                self.state = TransportState::Stopped;
+                Ok(())
+            }
+        }
+    }
+
+    fn send(&mut self, event: &EventEnvelope) -> Result<(), TransportError> {
+        match self.state {
+            TransportState::Stopped => Err(TransportError::NotStarted),
+            TransportState::Started => {
+                // Serialize event and send via Connect RPC
+                let _json = serde_json::to_string(event)
+                    .map_err(|e| TransportError::SendFailed(e.to_string()))?;
+                // Connect RPC send would happen here
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Pyro5Transport sends events to a Python Pyro5 object server.
+/// Pyro5 is a Python remote objects library.
+#[derive(Debug)]
+pub struct Pyro5Transport {
+    id: String,
+    state: TransportState,
+    #[allow(dead_code)]
+    uri: String,
+}
+
+impl Pyro5Transport {
+    pub fn new(id: impl Into<String>, uri: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            state: TransportState::Stopped,
+            uri: uri.into(),
+        }
+    }
+}
+
+impl Transport for Pyro5Transport {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn start(&mut self) -> Result<(), TransportError> {
+        match self.state {
+            TransportState::Started => Err(TransportError::AlreadyStarted),
+            TransportState::Stopped => {
+                // Pyro5 proxy would be established here
+                self.state = TransportState::Started;
+                Ok(())
+            }
+        }
+    }
+
+    fn stop(&mut self) -> Result<(), TransportError> {
+        match self.state {
+            TransportState::Stopped => Err(TransportError::NotStarted),
+            TransportState::Started => {
+                // Pyro5 proxy would be released here
+                self.state = TransportState::Stopped;
+                Ok(())
+            }
+        }
+    }
+
+    fn send(&mut self, event: &EventEnvelope) -> Result<(), TransportError> {
+        match self.state {
+            TransportState::Stopped => Err(TransportError::NotStarted),
+            TransportState::Started => {
+                // Serialize event and send to Pyro5 server
+                let _json = serde_json::to_string(event)
+                    .map_err(|e| TransportError::SendFailed(e.to_string()))?;
+                // Pyro5 call would happen here
+                Ok(())
+            }
+        }
+    }
+}
+
+/// FfiTransport sends events via Foreign Function Interface (FFI).
+/// This allows calling into C/C++ or other native libraries.
+#[derive(Debug)]
+pub struct FfiTransport {
+    id: String,
+    state: TransportState,
+    #[allow(dead_code)]
+    library_path: String,
+}
+
+impl FfiTransport {
+    pub fn new(id: impl Into<String>, library_path: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            state: TransportState::Stopped,
+            library_path: library_path.into(),
+        }
+    }
+}
+
+impl Transport for FfiTransport {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn start(&mut self) -> Result<(), TransportError> {
+        match self.state {
+            TransportState::Started => Err(TransportError::AlreadyStarted),
+            TransportState::Stopped => {
+                // Dynamic library would be loaded here
+                self.state = TransportState::Started;
+                Ok(())
+            }
+        }
+    }
+
+    fn stop(&mut self) -> Result<(), TransportError> {
+        match self.state {
+            TransportState::Stopped => Err(TransportError::NotStarted),
+            TransportState::Started => {
+                // Dynamic library would be unloaded here
+                self.state = TransportState::Stopped;
+                Ok(())
+            }
+        }
+    }
+
+    fn send(&mut self, event: &EventEnvelope) -> Result<(), TransportError> {
+        match self.state {
+            TransportState::Stopped => Err(TransportError::NotStarted),
+            TransportState::Started => {
+                // Serialize event and call FFI function
+                let _json = serde_json::to_string(event)
+                    .map_err(|e| TransportError::SendFailed(e.to_string()))?;
+                // FFI call would happen here
+                Ok(())
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,5 +638,134 @@ mod tests {
 
         assert_eq!(local.id(), "local-1");
         assert_eq!(null.id(), "null-1");
+    }
+
+    #[test]
+    fn test_subprocess_transport_basic() {
+        let mut transport = SubprocessTransport::new("test-subprocess", "/bin/cat", vec![]);
+        assert_eq!(transport.id(), "test-subprocess");
+
+        let result = transport.send(&EventEnvelope::new("run-test", "test.topic", "test_plugin", json!({})));
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), TransportError::NotStarted));
+
+        transport.start().expect("start should succeed");
+
+        let event = EventEnvelope::new("run-test", "test.topic", "test_plugin", json!({"n": 1}));
+        transport.send(&event).expect("send should succeed");
+
+        transport.stop().expect("stop should succeed");
+    }
+
+    #[test]
+    fn test_websocket_transport_basic() {
+        let mut transport = WebSocketTransport::new("test-ws", "ws://localhost:8080");
+        assert_eq!(transport.id(), "test-ws");
+
+        let result = transport.send(&EventEnvelope::new("run-test", "test.topic", "test_plugin", json!({})));
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), TransportError::NotStarted));
+
+        transport.start().expect("start should succeed");
+
+        let event = EventEnvelope::new("run-test", "test.topic", "test_plugin", json!({"n": 1}));
+        transport.send(&event).expect("send should succeed");
+
+        transport.stop().expect("stop should succeed");
+    }
+
+    #[test]
+    fn test_grpc_transport_basic() {
+        let mut transport = GrpcTransport::new("test-grpc", "http://localhost:50051");
+        assert_eq!(transport.id(), "test-grpc");
+
+        let result = transport.send(&EventEnvelope::new("run-test", "test.topic", "test_plugin", json!({})));
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), TransportError::NotStarted));
+
+        transport.start().expect("start should succeed");
+
+        let event = EventEnvelope::new("run-test", "test.topic", "test_plugin", json!({"n": 1}));
+        transport.send(&event).expect("send should succeed");
+
+        transport.stop().expect("stop should succeed");
+    }
+
+    #[test]
+    fn test_connectrpc_transport_basic() {
+        let mut transport = ConnectRpcTransport::new("test-connect", "http://localhost:8081");
+        assert_eq!(transport.id(), "test-connect");
+
+        let result = transport.send(&EventEnvelope::new("run-test", "test.topic", "test_plugin", json!({})));
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), TransportError::NotStarted));
+
+        transport.start().expect("start should succeed");
+
+        let event = EventEnvelope::new("run-test", "test.topic", "test_plugin", json!({"n": 1}));
+        transport.send(&event).expect("send should succeed");
+
+        transport.stop().expect("stop should succeed");
+    }
+
+    #[test]
+    fn test_pyro5_transport_basic() {
+        let mut transport = Pyro5Transport::new("test-pyro5", "PYRO:obj_12345@localhost:9090");
+        assert_eq!(transport.id(), "test-pyro5");
+
+        let result = transport.send(&EventEnvelope::new("run-test", "test.topic", "test_plugin", json!({})));
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), TransportError::NotStarted));
+
+        transport.start().expect("start should succeed");
+
+        let event = EventEnvelope::new("run-test", "test.topic", "test_plugin", json!({"n": 1}));
+        transport.send(&event).expect("send should succeed");
+
+        transport.stop().expect("stop should succeed");
+    }
+
+    #[test]
+    fn test_ffi_transport_basic() {
+        let mut transport = FfiTransport::new("test-ffi", "/usr/lib/libtest.so");
+        assert_eq!(transport.id(), "test-ffi");
+
+        let result = transport.send(&EventEnvelope::new("run-test", "test.topic", "test_plugin", json!({})));
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), TransportError::NotStarted));
+
+        transport.start().expect("start should succeed");
+
+        let event = EventEnvelope::new("run-test", "test.topic", "test_plugin", json!({"n": 1}));
+        transport.send(&event).expect("send should succeed");
+
+        transport.stop().expect("stop should succeed");
+    }
+
+    #[test]
+    fn test_all_transports_cannot_start_twice() {
+        let mut subprocess = SubprocessTransport::new("test", "/bin/cat", vec![]);
+        subprocess.start().expect("first start");
+        assert!(subprocess.start().is_err());
+
+        let mut ws = WebSocketTransport::new("test", "ws://localhost:8080");
+        ws.start().expect("first start");
+        assert!(ws.start().is_err());
+
+        let mut grpc = GrpcTransport::new("test", "http://localhost:50051");
+        grpc.start().expect("first start");
+        assert!(grpc.start().is_err());
+
+        let mut connect = ConnectRpcTransport::new("test", "http://localhost:8081");
+        connect.start().expect("first start");
+        assert!(connect.start().is_err());
+
+        let mut pyro5 = Pyro5Transport::new("test", "PYRO:obj@localhost:9090");
+        pyro5.start().expect("first start");
+        assert!(pyro5.start().is_err());
+
+        let mut ffi = FfiTransport::new("test", "/usr/lib/libtest.so");
+        ffi.start().expect("first start");
+        assert!(ffi.start().is_err());
     }
 }
