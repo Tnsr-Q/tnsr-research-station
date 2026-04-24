@@ -21,6 +21,13 @@ pub struct EventEnvelope {
     pub plugin_hash: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PublishReport {
+    pub attempted: usize,
+    pub delivered: usize,
+    pub failed: usize,
+}
+
 fn now_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -33,13 +40,41 @@ fn id(prefix: &str) -> String {
 }
 
 impl EventEnvelope {
-    pub fn new(topic: impl Into<String>, source: impl Into<String>, payload: Value) -> Self {
+    pub fn new(
+        session_id: impl Into<String>,
+        topic: impl Into<String>,
+        source: impl Into<String>,
+        payload: Value,
+    ) -> Self {
         Self {
             version: "tnsr.event.v1".into(),
             event_id: id("evt"),
             trace_id: id("trace"),
             parent_id: None,
-            session_id: id("session"),
+            session_id: session_id.into(),
+            topic: topic.into(),
+            source: source.into(),
+            created_at_ms: now_ms(),
+            payload,
+            input_hash: None,
+            artifact_hash: None,
+            schema_hash: None,
+            plugin_hash: None,
+        }
+    }
+
+    pub fn child_of(
+        parent: &Self,
+        topic: impl Into<String>,
+        source: impl Into<String>,
+        payload: Value,
+    ) -> Self {
+        Self {
+            version: "tnsr.event.v1".into(),
+            event_id: id("evt"),
+            trace_id: parent.trace_id.clone(),
+            parent_id: Some(parent.event_id.clone()),
+            session_id: parent.session_id.clone(),
             topic: topic.into(),
             source: source.into(),
             created_at_ms: now_ms(),
@@ -69,9 +104,20 @@ impl EventBus {
         rx
     }
 
-    pub fn publish(&self, event: EventEnvelope) {
+    pub fn publish(&self, event: EventEnvelope) -> PublishReport {
+        let attempted = self.subscribers.len();
+        let mut delivered = 0;
+
         for tx in &self.subscribers {
-            let _ = tx.send(event.clone());
+            if tx.send(event.clone()).is_ok() {
+                delivered += 1;
+            }
+        }
+
+        PublishReport {
+            attempted,
+            delivered,
+            failed: attempted.saturating_sub(delivered),
         }
     }
 }
@@ -96,5 +142,73 @@ impl SessionState {
             profile_name: profile_name.into(),
             started_at_ms: now_ms(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_event_ids_are_distinct() {
+        let a = EventEnvelope::new(
+            "session-a",
+            "quantum.state",
+            "adapter_quantum",
+            json!({ "n": 1 }),
+        );
+        let b = EventEnvelope::new(
+            "session-a",
+            "quantum.state",
+            "adapter_quantum",
+            json!({ "n": 2 }),
+        );
+
+        assert_ne!(a.event_id, b.event_id);
+    }
+
+    #[test]
+    fn test_child_event_preserves_trace_id() {
+        let parent = EventEnvelope::new(
+            "session-a",
+            "quantum.state",
+            "adapter_quantum",
+            json!({ "step": 1 }),
+        );
+        let child = EventEnvelope::child_of(
+            &parent,
+            "quantum.derived",
+            "adapter_quantum",
+            json!({ "step": 2 }),
+        );
+
+        assert_eq!(child.trace_id, parent.trace_id);
+        assert_eq!(child.parent_id.as_deref(), Some(parent.event_id.as_str()));
+        assert_eq!(child.session_id, parent.session_id);
+    }
+
+    #[test]
+    fn test_publish_report_counts_delivery() {
+        let mut bus = EventBus::new();
+        let rx_live = bus.subscribe();
+        let rx_dropped = bus.subscribe();
+        drop(rx_dropped);
+
+        let event = EventEnvelope::new(
+            "session-a",
+            "quantum.state",
+            "adapter_quantum",
+            json!({ "n": 1 }),
+        );
+        let report = bus.publish(event);
+
+        assert_eq!(report.attempted, 2);
+        assert_eq!(report.delivered, 1);
+        assert_eq!(report.failed, 1);
+
+        let _received = rx_live
+            .recv()
+            .expect("live subscriber should receive event");
     }
 }
