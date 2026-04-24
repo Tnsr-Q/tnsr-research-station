@@ -5,6 +5,7 @@ use bridge_gpui::to_gpui_overlay_line;
 use plugin_registry::{PluginKind, PluginManifest, PluginRegistry, TransportKind};
 use runtime_core::EventBus;
 use station_replay::JsonlReplayLog;
+use station_schema::{PayloadSchema, SchemaRegistry};
 use station_supervisor::{PluginRuntimeState, StationSupervisor};
 
 fn main() {
@@ -46,11 +47,32 @@ fn main() {
         .append_record(&admitted_event)
         .expect("append admitted event");
 
+    let mut schemas = SchemaRegistry::default();
+    let quantum_state_schema = PayloadSchema::new(
+        "tnsr.quantum.state.v1",
+        "quantum.state",
+        "1",
+        vec![
+            "state_dim".into(),
+            "collapse_ratio".into(),
+            "euler_characteristic".into(),
+        ],
+    );
+
+    schemas
+        .register(quantum_state_schema)
+        .expect("register quantum state schema");
+
     let mut bus = EventBus::new();
     let rx = bus.subscribe();
 
     let mut event = quantum_state_event(supervisor.session.run_id.clone());
     assert!(registry.can_publish(&event.source, &event.topic));
+
+    schemas
+        .attach_schema_hash(&mut event)
+        .expect("attach schema hash");
+    schemas.validate(&event).expect("validate event schema");
 
     let mut ledger = ArtifactLedger::default();
     let payload_bytes = serde_json::to_vec(&event.payload).expect("serialize payload");
