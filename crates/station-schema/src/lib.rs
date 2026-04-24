@@ -446,4 +446,60 @@ mod tests {
 
         let _ = std::fs::remove_file(path);
     }
+
+    #[test]
+    fn test_string_field_validates() {
+        let mut registry = SchemaRegistry::default();
+
+        let schema = PayloadSchema::new("tnsr.rag.result.v1", "rag.result", "1")
+            .required("message", FieldType::String)
+            .build();
+
+        registry.register(schema).expect("register schema");
+
+        let mut event = EventEnvelope::new(
+            "run-test",
+            "rag.result",
+            "adapter_rag",
+            json!({
+                "message": "test message"
+            }),
+        );
+
+        registry
+            .attach_schema_hash(&mut event)
+            .expect("attach schema hash");
+
+        registry.validate(&event).expect("valid string field should pass");
+    }
+
+    #[test]
+    fn test_string_field_wrong_type_fails() {
+        let mut registry = SchemaRegistry::default();
+
+        let schema = PayloadSchema::new("tnsr.rag.result.v1", "rag.result", "1")
+            .required("message", FieldType::String)
+            .build();
+
+        registry.register(schema).expect("register schema");
+
+        let mut event = EventEnvelope::new(
+            "run-test",
+            "rag.result",
+            "adapter_rag",
+            json!({
+                "message": 123
+            }),
+        );
+
+        registry
+            .attach_schema_hash(&mut event)
+            .expect("attach schema hash");
+
+        let err = registry
+            .validate(&event)
+            .expect_err("integer instead of string should fail");
+
+        assert!(matches!(err, SchemaError::WrongFieldType { .. }));
+    }
 }
