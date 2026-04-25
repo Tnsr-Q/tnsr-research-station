@@ -93,6 +93,8 @@ pub struct PluginTransportConfig {
     pub working_dir: Option<String>,
     #[serde(default)]
     pub env_allowlist: Vec<String>,
+    #[serde(default)]
+    pub inherit_env: bool,
     pub timeout_ms: Option<u64>,
 }
 
