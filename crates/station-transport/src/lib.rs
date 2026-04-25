@@ -52,6 +52,7 @@ pub struct TransportConfig {
     pub args: Vec<String>,
     pub working_dir: Option<String>,
     pub env_allowlist: Vec<String>,
+    pub inherit_env: bool,
     pub timeout_ms: Option<u64>,
 }
 
@@ -68,6 +69,7 @@ pub fn build_transport(config: &TransportConfig) -> Result<Box<dyn Transport>, T
                 SubprocessTransport::new(config.id.clone(), command, config.args.clone())
                     .with_working_dir(config.working_dir.clone())
                     .with_env_allowlist(config.env_allowlist.clone())
+                    .with_inherit_env(config.inherit_env)
                     .with_shutdown_timeout_ms(config.timeout_ms),
             ))
         }
@@ -232,6 +234,7 @@ pub struct SubprocessTransport {
     args: Vec<String>,
     working_dir: Option<String>,
     env_allowlist: Vec<String>,
+    inherit_env: bool,
     child: Option<Child>,
     child_stdin: Option<ChildStdin>,
     line_rx: Option<Receiver<SidecarLine>>,
@@ -258,6 +261,7 @@ impl SubprocessTransport {
             args,
             working_dir: None,
             env_allowlist: Vec::new(),
+            inherit_env: false,
             child: None,
             child_stdin: None,
             line_rx: None,
@@ -287,6 +291,11 @@ impl SubprocessTransport {
 
     pub fn with_env_allowlist(mut self, env_allowlist: Vec<String>) -> Self {
         self.env_allowlist = env_allowlist;
+        self
+    }
+
+    pub fn with_inherit_env(mut self, inherit_env: bool) -> Self {
+        self.inherit_env = inherit_env;
         self
     }
 
@@ -432,12 +441,13 @@ impl Transport for SubprocessTransport {
                 if let Some(working_dir) = &self.working_dir {
                     command.current_dir(working_dir);
                 }
-                if !self.env_allowlist.is_empty() {
-                    command.env_clear();
-                    for key in &self.env_allowlist {
-                        if let Ok(value) = std::env::var(key) {
-                            command.env(key, value);
-                        }
+                command.env_clear();
+                if self.inherit_env {
+                    command.envs(std::env::vars());
+                }
+                for key in &self.env_allowlist {
+                    if let Ok(value) = std::env::var(key) {
+                        command.env(key, value);
                     }
                 }
                 let mut child = command
@@ -882,6 +892,7 @@ mod tests {
             args: vec![],
             working_dir: None,
             env_allowlist: vec![],
+            inherit_env: false,
             timeout_ms: None,
         };
 
@@ -899,6 +910,7 @@ mod tests {
             args: vec![],
             working_dir: None,
             env_allowlist: vec![],
+            inherit_env: false,
             timeout_ms: None,
         };
 
@@ -917,6 +929,7 @@ mod tests {
             args: vec![],
             working_dir: None,
             env_allowlist: vec![],
+            inherit_env: false,
             timeout_ms: None,
         };
 
@@ -938,6 +951,7 @@ mod tests {
             args: vec![],
             working_dir: None,
             env_allowlist: vec![],
+            inherit_env: false,
             timeout_ms: None,
         };
 
@@ -955,6 +969,7 @@ mod tests {
             args: vec![],
             working_dir: None,
             env_allowlist: vec![],
+            inherit_env: false,
             timeout_ms: None,
         };
         let mut transport = build_transport(&config).expect("local transport should build");
@@ -1133,6 +1148,45 @@ mod tests {
             .iter()
             .any(|evt| evt.topic == "policy.runtime.denied"));
         transport.stop().expect("stop should succeed");
+    }
+
+    #[test]
+    #[cfg(feature = "subprocess")]
+    #[cfg(unix)]
+    fn subprocess_does_not_inherit_environment_by_default() {
+        let mut transport = SubprocessTransport::new("test-subprocess", "/usr/bin/env", vec![]);
+        transport.start().expect("start should succeed");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        transport.stop().expect("stop should succeed");
+        let evidence = transport.take_evidence_events();
+        assert!(!evidence.iter().any(|event| {
+            event.topic == "transport.runtime.stdout_parse_failed"
+                && event
+                    .payload
+                    .get("line")
+                    .and_then(|line| line.as_str())
+                    .is_some_and(|line| line.starts_with("PATH="))
+        }));
+    }
+
+    #[test]
+    #[cfg(feature = "subprocess")]
+    #[cfg(unix)]
+    fn subprocess_can_explicitly_inherit_environment() {
+        let mut transport = SubprocessTransport::new("test-subprocess", "/usr/bin/env", vec![])
+            .with_inherit_env(true);
+        transport.start().expect("start should succeed");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        transport.stop().expect("stop should succeed");
+        let evidence = transport.take_evidence_events();
+        assert!(evidence.iter().any(|event| {
+            event.topic == "transport.runtime.stdout_parse_failed"
+                && event
+                    .payload
+                    .get("line")
+                    .and_then(|line| line.as_str())
+                    .is_some_and(|line| line.starts_with("PATH="))
+        }));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use artifact_ledger::ArtifactRecordRequest;
 use runtime_core::{EventEnvelope, PublishReport};
@@ -125,6 +125,10 @@ impl KernelRuntime {
         let manifest = self.context.registry.plugin(plugin_id).ok_or_else(|| {
             KernelError::PluginRegistration(format!("unknown plugin: {plugin_id}"))
         })?;
+        let working_dir = resolve_bounded_working_dir(
+            manifest.transport_config.working_dir.as_deref(),
+            &self.context.profile_dir,
+        )?;
 
         let transport_config = TransportConfig {
             id: format!("plugin:{plugin_id}"),
@@ -132,8 +136,9 @@ impl KernelRuntime {
             endpoint: manifest.transport_config.endpoint.clone(),
             command: manifest.transport_config.command.clone(),
             args: manifest.transport_config.args.clone(),
-            working_dir: manifest.transport_config.working_dir.clone(),
+            working_dir: working_dir.map(|path| path.to_string_lossy().to_string()),
             env_allowlist: manifest.transport_config.env_allowlist.clone(),
+            inherit_env: manifest.transport_config.inherit_env,
             timeout_ms: manifest.transport_config.timeout_ms,
         };
 
@@ -389,6 +394,70 @@ fn supervisor_denial_kind(denial: &SupervisorError) -> &'static str {
     }
 }
 
+fn normalize_path(path: &Path) -> Result<PathBuf, String> {
+    let mut normalized = if path.is_absolute() {
+        PathBuf::from(std::path::MAIN_SEPARATOR.to_string())
+    } else {
+        PathBuf::new()
+    };
+
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(std::path::MAIN_SEPARATOR.to_string()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return Err("path traversal escapes allowed root".to_string());
+                }
+            }
+            Component::Normal(part) => normalized.push(part),
+        }
+    }
+
+    Ok(normalized)
+}
+
+fn resolve_bounded_working_dir(
+    working_dir: Option<&str>,
+    profile_dir: &Path,
+) -> Result<Option<PathBuf>, KernelError> {
+    let Some(working_dir) = working_dir else {
+        return Ok(None);
+    };
+
+    let profile_root = normalize_path(profile_dir).map_err(KernelError::PluginRegistration)?;
+    let workspace_root = profile_dir
+        .parent()
+        .and_then(|parent| normalize_path(parent).ok());
+
+    let provided = PathBuf::from(working_dir);
+    let candidates = if provided.is_absolute() {
+        vec![provided]
+    } else {
+        let mut values = vec![profile_dir.join(&provided)];
+        if let Some(parent) = profile_dir.parent() {
+            values.push(parent.join(&provided));
+        }
+        values
+    };
+
+    for candidate in candidates {
+        let normalized = normalize_path(&candidate).map_err(KernelError::PluginRegistration)?;
+        if normalized.starts_with(&profile_root)
+            || workspace_root
+                .as_ref()
+                .is_some_and(|workspace| normalized.starts_with(workspace))
+        {
+            return Ok(Some(normalized));
+        }
+    }
+
+    Err(KernelError::PluginRegistration(format!(
+        "working_dir escapes allowed roots: {working_dir}"
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -534,8 +603,9 @@ mod tests {
                 break;
             }
 
-            let replay_events = JsonlReplayLog::read_all_events(runtime.context.events_path.clone())
-                .expect("events should be readable");
+            let replay_events =
+                JsonlReplayLog::read_all_events(runtime.context.events_path.clone())
+                    .expect("events should be readable");
             if replay_events
                 .iter()
                 .any(|event| event.topic == "policy.event.denied")
@@ -1080,6 +1150,38 @@ mod tests {
     #[cfg(feature = "subprocess")]
     #[cfg(unix)]
     #[test]
+    fn kernel_rejects_subprocess_working_dir_path_traversal() {
+        let mut runtime =
+            KernelRuntime::from_profile_path(root_profile_path()).expect("runtime should init");
+        register_admitted_plugin_manifest(
+            &mut runtime,
+            PluginManifest {
+                id: "test_subprocess_workdir_escape".to_string(),
+                kind: PluginKind::Compute,
+                transport: TransportKind::Subprocess,
+                version: "0.1.0".to_string(),
+                artifact_hash:
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                        .to_string(),
+                subscribes: vec!["quantum.state".to_string()],
+                publishes: vec!["quantum.state".to_string()],
+                capabilities: vec![],
+                capability_claims: vec![],
+                transport_config: PluginTransportConfig {
+                    command: Some("/bin/cat".to_string()),
+                    working_dir: Some("../../../../../../".to_string()),
+                    ..PluginTransportConfig::default()
+                },
+            },
+        );
+
+        let result = runtime.start_plugin("test_subprocess_workdir_escape");
+        assert!(matches!(result, Err(KernelError::PluginRegistration(_))));
+    }
+
+    #[cfg(feature = "subprocess")]
+    #[cfg(unix)]
+    #[test]
     fn kernel_starts_subprocess_from_manifest_transport_config() {
         let mut runtime =
             KernelRuntime::from_profile_path(root_profile_path()).expect("runtime should init");
@@ -1148,6 +1250,9 @@ mod tests {
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
         let stderr_seen = loop {
+            runtime
+                .drain_plugin_outputs("test_subprocess_stderr")
+                .expect("drain should succeed");
             let events = JsonlReplayLog::read_all_events(runtime.context.events_path.clone())
                 .expect("events should be readable");
             if events
