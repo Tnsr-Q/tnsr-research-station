@@ -418,6 +418,10 @@ fn normalize_path(path: &Path) -> Result<PathBuf, String> {
     Ok(normalized)
 }
 
+fn canonicalize_or_normalize(path: &Path) -> Result<PathBuf, String> {
+    std::fs::canonicalize(path).or_else(|_| normalize_path(path))
+}
+
 fn resolve_bounded_working_dir(
     working_dir: Option<&str>,
     profile_dir: &Path,
@@ -426,24 +430,29 @@ fn resolve_bounded_working_dir(
         return Ok(None);
     };
 
-    let profile_root = normalize_path(profile_dir).map_err(KernelError::PluginRegistration)?;
-    let workspace_root = profile_dir
+    let profile_root =
+        canonicalize_or_normalize(profile_dir).map_err(KernelError::PluginRegistration)?;
+    let workspace_root = profile_root
         .parent()
-        .and_then(|parent| normalize_path(parent).ok());
+        .map(canonicalize_or_normalize)
+        .transpose()
+        .map_err(KernelError::PluginRegistration)?
+        .filter(|workspace| !workspace.as_os_str().is_empty());
 
     let provided = PathBuf::from(working_dir);
     let candidates = if provided.is_absolute() {
         vec![provided]
     } else {
-        let mut values = vec![profile_dir.join(&provided)];
-        if let Some(parent) = profile_dir.parent() {
-            values.push(parent.join(&provided));
+        let mut values = vec![profile_root.join(&provided)];
+        if let Some(workspace) = workspace_root.as_ref() {
+            values.push(workspace.join(&provided));
         }
         values
     };
 
     for candidate in candidates {
-        let normalized = normalize_path(&candidate).map_err(KernelError::PluginRegistration)?;
+        let normalized =
+            canonicalize_or_normalize(&candidate).map_err(KernelError::PluginRegistration)?;
         if normalized.starts_with(&profile_root)
             || workspace_root
                 .as_ref()
@@ -553,6 +562,36 @@ mod tests {
             .replay
             .append_record(&admitted_event)
             .expect("append admitted event");
+    }
+
+    #[test]
+    fn rejects_absolute_working_dir_outside_workspace() {
+        let profile_dir = PathBuf::from("/tmp/workspace/profiles/default");
+        let result = resolve_bounded_working_dir(Some("/tmp/outside"), &profile_dir);
+        assert!(matches!(result, Err(KernelError::PluginRegistration(_))));
+    }
+
+    #[test]
+    fn rejects_empty_workspace_root_prefix_escape() {
+        let profile_dir = PathBuf::from("profile");
+        let result = resolve_bounded_working_dir(Some("../escape"), &profile_dir);
+        assert!(matches!(result, Err(KernelError::PluginRegistration(_))));
+    }
+
+    #[test]
+    fn accepts_workspace_relative_working_dir() {
+        let profile_dir = PathBuf::from("/tmp/workspace/profile");
+        let result = resolve_bounded_working_dir(Some("../tools"), &profile_dir)
+            .expect("workspace-relative working_dir should be accepted");
+        assert_eq!(result, Some(PathBuf::from("/tmp/workspace/tools")));
+    }
+
+    #[test]
+    fn accepts_profile_relative_working_dir() {
+        let profile_dir = PathBuf::from("/tmp/workspace/profile");
+        let result = resolve_bounded_working_dir(Some("runtime"), &profile_dir)
+            .expect("profile-relative working_dir should be accepted");
+        assert_eq!(result, Some(PathBuf::from("/tmp/workspace/profile/runtime")));
     }
 
     #[cfg(all(feature = "subprocess", unix))]
