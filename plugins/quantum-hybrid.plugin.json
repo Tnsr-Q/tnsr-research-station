@@ -6,5 +6,10 @@
   "artifact_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "subscribes": ["quantum.analyze"],
   "publishes": ["quantum.state"],
-  "capabilities": ["collapse_ratio", "euler_characteristic", "galois_order"]
+  "capabilities": ["collapse_ratio", "euler_characteristic", "galois_order"],
+  "capability_claims": [
+    { "name": "collapse_ratio", "projection_only": false },
+    { "name": "euler_characteristic", "projection_only": false },
+    { "name": "galois_order", "projection_only": true }
+  ]
 }

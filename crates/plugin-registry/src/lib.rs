@@ -59,6 +59,13 @@ impl TransportKind {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CapabilityClaim {
+    pub name: String,
+    #[serde(default)]
+    pub projection_only: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginManifest {
     pub id: String,
@@ -72,6 +79,8 @@ pub struct PluginManifest {
     pub publishes: Vec<String>,
     #[serde(default)]
     pub capabilities: Vec<String>,
+    #[serde(default)]
+    pub capability_claims: Vec<CapabilityClaim>,
 }
 
 #[derive(Default)]
@@ -108,6 +117,27 @@ impl PluginRegistry {
 
         if has_duplicates(&plugin.subscribes) {
             return Err(format!("duplicate subscribe topics for {}", plugin.id));
+        }
+
+        for claim in &plugin.capability_claims {
+            if claim.name.trim().is_empty() {
+                return Err(format!(
+                    "capability claim name cannot be empty for plugin {}",
+                    plugin.id
+                ));
+            }
+        }
+
+        let claim_names: Vec<String> = plugin
+            .capability_claims
+            .iter()
+            .map(|c| c.name.clone())
+            .collect();
+        if has_duplicates(&claim_names) {
+            return Err(format!(
+                "duplicate capability claim names for {}",
+                plugin.id
+            ));
         }
 
         if !is_sha256_urn(&plugin.artifact_hash) {
@@ -182,6 +212,7 @@ mod tests {
             subscribes: subscribes.into_iter().map(ToString::to_string).collect(),
             publishes: publishes.into_iter().map(ToString::to_string).collect(),
             capabilities: vec!["capability".to_string()],
+            capability_claims: vec![],
         }
     }
 
@@ -246,6 +277,10 @@ mod tests {
             subscribes: vec!["test.input".to_string()],
             publishes: vec!["test.output".to_string()],
             capabilities: vec!["test_capability".to_string()],
+            capability_claims: vec![CapabilityClaim {
+                name: "test_claim".to_string(),
+                projection_only: false,
+            }],
         };
 
         let id = ulid::Ulid::new().to_string();
@@ -261,5 +296,116 @@ mod tests {
         assert_eq!(loaded.subscribes, vec!["test.input"]);
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_capability_claims_round_trip_json() {
+        let manifest = PluginManifest {
+            id: "adapter_claims_test".to_string(),
+            kind: PluginKind::Compute,
+            transport: TransportKind::Local,
+            version: "0.1.0".to_string(),
+            artifact_hash:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                    .to_string(),
+            subscribes: vec![],
+            publishes: vec![],
+            capabilities: vec!["simple_cap".to_string()],
+            capability_claims: vec![
+                CapabilityClaim {
+                    name: "claim_a".to_string(),
+                    projection_only: false,
+                },
+                CapabilityClaim {
+                    name: "claim_b".to_string(),
+                    projection_only: true,
+                },
+            ],
+        };
+
+        let id = ulid::Ulid::new().to_string();
+        let path = std::env::temp_dir().join(format!("tnsr-capability-claims-{}.json", id));
+
+        write_plugin_manifest_json(&manifest, &path).unwrap();
+        let loaded = load_plugin_manifest_json(&path).unwrap();
+
+        assert_eq!(loaded.capabilities, vec!["simple_cap"]);
+        assert_eq!(loaded.capability_claims.len(), 2);
+        assert_eq!(loaded.capability_claims[0].name, "claim_a");
+        assert!(!loaded.capability_claims[0].projection_only);
+        assert_eq!(loaded.capability_claims[1].name, "claim_b");
+        assert!(loaded.capability_claims[1].projection_only);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_duplicate_capability_claims_rejected() {
+        let mut registry = PluginRegistry::default();
+        let manifest = PluginManifest {
+            id: "adapter_dup_claims".to_string(),
+            kind: PluginKind::Compute,
+            transport: TransportKind::Local,
+            version: "0.1.0".to_string(),
+            artifact_hash:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                    .to_string(),
+            subscribes: vec![],
+            publishes: vec![],
+            capabilities: vec![],
+            capability_claims: vec![
+                CapabilityClaim {
+                    name: "duplicate_name".to_string(),
+                    projection_only: false,
+                },
+                CapabilityClaim {
+                    name: "duplicate_name".to_string(),
+                    projection_only: true,
+                },
+            ],
+        };
+
+        let result = registry.register(manifest);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("duplicate capability claim names"), "{}", err);
+    }
+
+    #[test]
+    fn test_empty_capability_name_rejected() {
+        let mut registry = PluginRegistry::default();
+        let manifest = PluginManifest {
+            id: "adapter_empty_claim".to_string(),
+            kind: PluginKind::Compute,
+            transport: TransportKind::Local,
+            version: "0.1.0".to_string(),
+            artifact_hash:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                    .to_string(),
+            subscribes: vec![],
+            publishes: vec![],
+            capabilities: vec![],
+            capability_claims: vec![CapabilityClaim {
+                name: "  ".to_string(),
+                projection_only: false,
+            }],
+        };
+
+        let result = registry.register(manifest);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("capability claim name cannot be empty"), "{}", err);
+    }
+
+    #[test]
+    fn test_projection_only_capability_serializes() {
+        let claim = CapabilityClaim {
+            name: "projection_view".to_string(),
+            projection_only: true,
+        };
+        let json = serde_json::to_string(&claim).unwrap();
+        let loaded: CapabilityClaim = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.name, "projection_view");
+        assert!(loaded.projection_only);
     }
 }

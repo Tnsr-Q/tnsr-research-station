@@ -12,6 +12,12 @@ pub enum RunStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CapabilityClaimSummary {
+    pub name: String,
+    pub projection_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginSummary {
     pub id: String,
     pub kind: String,
@@ -21,6 +27,7 @@ pub struct PluginSummary {
     pub publishes: Vec<String>,
     pub subscribes: Vec<String>,
     pub capabilities: Vec<String>,
+    pub capability_claims: Vec<CapabilityClaimSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

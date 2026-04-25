@@ -106,6 +106,9 @@ runs/<run_id>/
 - Duplicate publish/subscribe topic rejection
 - Per-plugin publish/subscribe authorization
 - Registry introspection for manifest generation
+- `CapabilityClaim` - structured capability claims with optional `projection_only` flag
+- Duplicate capability claim name rejection
+- Empty capability name rejection
 
 **Design principle:** Plugin manifests are runtime claims, not arbitrary strings.
 
@@ -255,7 +258,8 @@ pub trait Transport {
 **Features:**
 - `RunManifest` - comprehensive run summary
 - `RunStatus` - run lifecycle state (active, completed, failed)
-- `PluginSummary` - plugin participation records
+- `PluginSummary` - plugin participation records (includes `capability_claims`)
+- `CapabilityClaimSummary` - structured capability claim records in run manifests
 - `SchemaSummary` - schema usage records
 - `ArtifactSummary` - artifact generation records
 - JSON manifest write/load helpers
@@ -499,7 +503,8 @@ A plugin manifest defines:
 - `artifact_hash`
 - `publishes`
 - `subscribes`
-- `capabilities`
+- `capabilities` (simple string list, retained for backwards compatibility)
+- `capability_claims` (structured claims with `name` and optional `projection_only` flag)
 
 Plugins may only publish topics declared in their manifests.
 

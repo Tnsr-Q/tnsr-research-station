@@ -10,8 +10,8 @@ use runtime_core::EventBus;
 use station_policy::PolicyEngine;
 use station_replay::JsonlReplayLog;
 use station_run::{
-    load_run_profile_json, write_manifest_json, ArtifactSummary, PluginSummary, RunManifest,
-    RunStatus, SchemaSummary,
+    load_run_profile_json, write_manifest_json, ArtifactSummary, CapabilityClaimSummary,
+    PluginSummary, RunManifest, RunStatus, SchemaSummary,
 };
 use station_schema::{load_schema_json, FieldType, SchemaRegistry};
 use station_supervisor::{PluginRuntimeState, StationSupervisor};
@@ -58,6 +58,14 @@ fn build_plugin_summaries(registry: &PluginRegistry) -> Vec<PluginSummary> {
             publishes: m.publishes.clone(),
             subscribes: m.subscribes.clone(),
             capabilities: m.capabilities.clone(),
+            capability_claims: m
+                .capability_claims
+                .iter()
+                .map(|c| CapabilityClaimSummary {
+                    name: c.name.clone(),
+                    projection_only: c.projection_only,
+                })
+                .collect(),
         })
         .collect();
     plugins.sort_by(|a, b| a.id.cmp(&b.id));
