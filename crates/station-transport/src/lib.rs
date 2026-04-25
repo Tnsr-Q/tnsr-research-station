@@ -1,4 +1,16 @@
 use runtime_core::EventEnvelope;
+#[cfg(feature = "subprocess")]
+use serde_json::json;
+#[cfg(feature = "subprocess")]
+use std::io::{BufRead, BufReader, Write};
+#[cfg(feature = "subprocess")]
+use std::process::{Child, ChildStdin, Command, Stdio};
+#[cfg(feature = "subprocess")]
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+#[cfg(feature = "subprocess")]
+use std::thread;
+#[cfg(feature = "subprocess")]
+use std::time::{Duration, Instant};
 
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
@@ -10,6 +22,9 @@ pub enum TransportError {
 
     #[error("send failed: {0}")]
     SendFailed(String),
+
+    #[error("transport timeout: {0}")]
+    Timeout(String),
 
     #[error("transport error: {0}")]
     Other(String),
@@ -41,12 +56,26 @@ pub fn build_transport(config: &TransportConfig) -> Result<Box<dyn Transport>, T
     match config.kind {
         TransportKind::Local => Ok(Box::new(LocalTransport::new(config.id.clone()))),
         TransportKind::Null => Ok(Box::new(NullTransport::new(config.id.clone()))),
+        #[cfg(feature = "subprocess")]
+        TransportKind::Subprocess => {
+            let command = config.command.clone().ok_or_else(|| {
+                TransportError::Other("subprocess transport requires command".to_string())
+            })?;
+            Ok(Box::new(SubprocessTransport::new(
+                config.id.clone(),
+                command,
+                config.args.clone(),
+            )))
+        }
+        #[cfg(not(feature = "subprocess"))]
+        TransportKind::Subprocess => Err(TransportError::Other(
+            "transport kind not enabled".to_string(),
+        )),
         TransportKind::Wasm
         | TransportKind::WebSocket
         | TransportKind::Grpc
         | TransportKind::ConnectRpc
         | TransportKind::Pyro5
-        | TransportKind::Subprocess
         | TransportKind::Ffi => Err(TransportError::Other(
             "transport kind not enabled".to_string(),
         )),
@@ -184,18 +213,30 @@ impl Transport for NullTransport {
 
 /// SubprocessTransport spawns a subprocess and sends events via stdin.
 /// The subprocess is expected to read JSON-encoded EventEnvelope objects from stdin.
+#[cfg(feature = "subprocess")]
 #[derive(Debug)]
 pub struct SubprocessTransport {
     id: String,
     state: TransportState,
-    #[allow(dead_code)]
     command: String,
-    #[allow(dead_code)]
     args: Vec<String>,
-    #[cfg(feature = "subprocess")]
-    child: Option<tokio::process::Child>,
+    child: Option<Child>,
+    child_stdin: Option<ChildStdin>,
+    line_rx: Option<Receiver<SidecarLine>>,
+    candidate_events: Vec<EventEnvelope>,
+    evidence_events: Vec<EventEnvelope>,
+    session_id: Option<String>,
+    shutdown_timeout: Duration,
 }
 
+#[cfg(feature = "subprocess")]
+#[derive(Debug)]
+enum SidecarLine {
+    Stdout(String),
+    Stderr(String),
+}
+
+#[cfg(feature = "subprocess")]
 impl SubprocessTransport {
     pub fn new(id: impl Into<String>, command: impl Into<String>, args: Vec<String>) -> Self {
         Self {
@@ -203,12 +244,133 @@ impl SubprocessTransport {
             state: TransportState::Stopped,
             command: command.into(),
             args,
-            #[cfg(feature = "subprocess")]
             child: None,
+            child_stdin: None,
+            line_rx: None,
+            candidate_events: Vec::new(),
+            evidence_events: Vec::new(),
+            session_id: None,
+            shutdown_timeout: Duration::from_secs(1),
         }
+    }
+
+    pub fn with_shutdown_timeout(mut self, timeout: Duration) -> Self {
+        self.shutdown_timeout = timeout;
+        self
+    }
+
+    pub fn admit_candidate_events<F>(&mut self, mut policy_admit: F)
+    where
+        F: FnMut(&EventEnvelope) -> bool,
+    {
+        let mut retained = Vec::new();
+        let transport_id = self.id.clone();
+        let candidates = std::mem::take(&mut self.candidate_events);
+        for event in candidates {
+            if policy_admit(&event) {
+                retained.push(event);
+            } else {
+                let event_id = event.event_id.clone();
+                let topic = event.topic.clone();
+                self.evidence_events.push(self.evidence(
+                    "policy.runtime.denied",
+                    json!({
+                        "transport_id": transport_id.clone(),
+                        "reason": "subprocess-originating event denied by policy engine",
+                        "event_id": event_id,
+                        "topic": topic
+                    }),
+                ));
+            }
+        }
+        self.candidate_events = retained;
+    }
+
+    pub fn candidate_events(&self) -> &[EventEnvelope] {
+        &self.candidate_events
+    }
+
+    pub fn take_evidence_events(&mut self) -> Vec<EventEnvelope> {
+        std::mem::take(&mut self.evidence_events)
+    }
+
+    fn spawn_line_reader<T: std::io::Read + Send + 'static>(
+        reader: T,
+        tx: Sender<SidecarLine>,
+        is_stderr: bool,
+    ) {
+        thread::spawn(move || {
+            let reader = BufReader::new(reader);
+            for line in reader.lines() {
+                let Ok(line) = line else {
+                    break;
+                };
+                let send_result = if is_stderr {
+                    tx.send(SidecarLine::Stderr(line))
+                } else {
+                    tx.send(SidecarLine::Stdout(line))
+                };
+                if send_result.is_err() {
+                    break;
+                }
+            }
+        });
+    }
+
+    fn pump_sidecar_output(&mut self) {
+        let Some(rx) = &self.line_rx else {
+            return;
+        };
+        loop {
+            match rx.try_recv() {
+                Ok(SidecarLine::Stdout(line)) => {
+                    if let Ok(candidate) = serde_json::from_str::<EventEnvelope>(&line) {
+                        self.candidate_events.push(candidate);
+                    }
+                }
+                Ok(SidecarLine::Stderr(line)) => {
+                    self.evidence_events.push(self.evidence(
+                        "transport.runtime.stderr",
+                        json!({
+                            "transport_id": self.id,
+                            "line": line
+                        }),
+                    ));
+                }
+                Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
+            }
+        }
+    }
+
+    fn check_child_status(&mut self) {
+        let status = match self.child.as_mut().map(|child| child.try_wait()) {
+            Some(Ok(Some(status))) => Some(status),
+            _ => None,
+        };
+        if let Some(status) = status.filter(|status| !status.success()) {
+            self.evidence_events.push(self.evidence(
+                "transport.runtime.failed",
+                json!({
+                    "transport_id": self.id,
+                    "reason": format!("nonzero child exit: {:?}", status.code())
+                }),
+            ));
+        }
+    }
+
+    fn evidence(&self, topic: &str, payload: serde_json::Value) -> EventEnvelope {
+        EventEnvelope::new(
+            self.session_id
+                .clone()
+                .unwrap_or_else(|| "unknown-run".to_string()),
+            topic,
+            "station_transport",
+            payload,
+        )
     }
 }
 
+#[cfg(feature = "subprocess")]
 impl Transport for SubprocessTransport {
     fn id(&self) -> &str {
         &self.id
@@ -218,11 +380,27 @@ impl Transport for SubprocessTransport {
         match self.state {
             TransportState::Started => Err(TransportError::AlreadyStarted),
             TransportState::Stopped => {
-                #[cfg(feature = "subprocess")]
-                {
-                    // Subprocess spawning would happen here in a real implementation
-                    // For now, we just mark as started without actually spawning
+                let mut command = Command::new(&self.command);
+                command
+                    .args(&self.args)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped());
+                let mut child = command
+                    .spawn()
+                    .map_err(|err| TransportError::Other(err.to_string()))?;
+                self.child_stdin = child.stdin.take();
+
+                let (tx, rx) = mpsc::channel();
+                if let Some(stdout) = child.stdout.take() {
+                    Self::spawn_line_reader(stdout, tx.clone(), false);
                 }
+                if let Some(stderr) = child.stderr.take() {
+                    Self::spawn_line_reader(stderr, tx, true);
+                }
+
+                self.child = Some(child);
+                self.line_rx = Some(rx);
                 self.state = TransportState::Started;
                 Ok(())
             }
@@ -233,11 +411,52 @@ impl Transport for SubprocessTransport {
         match self.state {
             TransportState::Stopped => Err(TransportError::NotStarted),
             TransportState::Started => {
-                #[cfg(feature = "subprocess")]
-                {
-                    // Kill subprocess if it exists
-                    self.child = None;
+                self.pump_sidecar_output();
+                let mut exit_status: Option<std::process::ExitStatus> = None;
+                let mut timed_out = false;
+                if let Some(child) = self.child.as_mut() {
+                    let start_wait = Instant::now();
+                    loop {
+                        if let Ok(Some(status)) = child.try_wait() {
+                            exit_status = Some(status);
+                            break;
+                        }
+                        if start_wait.elapsed() >= self.shutdown_timeout {
+                            timed_out = true;
+                            child
+                                .kill()
+                                .map_err(|err| TransportError::Other(err.to_string()))?;
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
                 }
+                if let Some(status) = exit_status.filter(|status| !status.success()) {
+                    self.evidence_events.push(self.evidence(
+                        "transport.runtime.failed",
+                        json!({
+                            "transport_id": self.id,
+                            "reason": format!("nonzero child exit: {:?}", status.code())
+                        }),
+                    ));
+                }
+                if timed_out {
+                    self.evidence_events.push(self.evidence(
+                        "transport.runtime.timeout",
+                        json!({
+                            "transport_id": self.id,
+                            "timeout_ms": self.shutdown_timeout.as_millis()
+                        }),
+                    ));
+                    self.evidence_events.push(self.evidence(
+                        "transport.runtime.killed",
+                        json!({ "transport_id": self.id }),
+                    ));
+                }
+
+                self.child = None;
+                self.child_stdin = None;
+                self.line_rx = None;
                 self.state = TransportState::Stopped;
                 Ok(())
             }
@@ -248,17 +467,25 @@ impl Transport for SubprocessTransport {
         match self.state {
             TransportState::Stopped => Err(TransportError::NotStarted),
             TransportState::Started => {
-                #[cfg(feature = "subprocess")]
-                {
-                    // In a real implementation, serialize event to JSON and write to child stdin
-                    let _json = serde_json::to_string(event)
-                        .map_err(|e| TransportError::SendFailed(e.to_string()))?;
-                    // Write to stdin would happen here
-                }
-                #[cfg(not(feature = "subprocess"))]
-                {
-                    let _ = event; // Suppress unused variable warning
-                }
+                self.session_id = Some(event.session_id.clone());
+                let json_line = serde_json::to_string(event)
+                    .map_err(|err| TransportError::SendFailed(err.to_string()))?;
+                let stdin = self
+                    .child_stdin
+                    .as_mut()
+                    .ok_or_else(|| TransportError::SendFailed("child stdin unavailable".into()))?;
+                stdin
+                    .write_all(json_line.as_bytes())
+                    .map_err(|err| TransportError::SendFailed(err.to_string()))?;
+                stdin
+                    .write_all(b"\n")
+                    .map_err(|err| TransportError::SendFailed(err.to_string()))?;
+                stdin
+                    .flush()
+                    .map_err(|err| TransportError::SendFailed(err.to_string()))?;
+
+                self.pump_sidecar_output();
+                self.check_child_status();
                 Ok(())
             }
         }
@@ -604,6 +831,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "subprocess"))]
     fn rejects_subprocess_transport_until_feature_enabled() {
         let config = TransportConfig {
             id: "subprocess-from-config".to_string(),
@@ -618,6 +846,21 @@ mod tests {
             result,
             Err(TransportError::Other(msg)) if msg == "transport kind not enabled"
         ));
+    }
+
+    #[test]
+    #[cfg(feature = "subprocess")]
+    fn builds_subprocess_transport_when_feature_enabled() {
+        let config = TransportConfig {
+            id: "subprocess-from-config".to_string(),
+            kind: TransportKind::Subprocess,
+            endpoint: None,
+            command: Some("/bin/cat".to_string()),
+            args: vec![],
+        };
+
+        let transport = build_transport(&config).expect("subprocess transport should build");
+        assert_eq!(transport.id(), "subprocess-from-config");
     }
 
     #[test]
@@ -747,6 +990,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "subprocess")]
     fn test_subprocess_transport_basic() {
         let mut transport = SubprocessTransport::new("test-subprocess", "/bin/cat", vec![]);
         assert_eq!(transport.id(), "test-subprocess");
@@ -765,6 +1009,41 @@ mod tests {
         let event = EventEnvelope::new("run-test", "test.topic", "test_plugin", json!({"n": 1}));
         transport.send(&event).expect("send should succeed");
 
+        transport.stop().expect("stop should succeed");
+    }
+
+    #[test]
+    #[cfg(feature = "subprocess")]
+    fn subprocess_emits_timeout_and_kill_evidence() {
+        let mut transport =
+            SubprocessTransport::new("test-subprocess", "/bin/sleep", vec!["5".into()])
+                .with_shutdown_timeout(std::time::Duration::from_millis(10));
+        transport.start().expect("start should succeed");
+        transport.stop().expect("stop should succeed");
+        let evidence = transport.take_evidence_events();
+        assert!(evidence
+            .iter()
+            .any(|event| event.topic == "transport.runtime.timeout"));
+        assert!(evidence
+            .iter()
+            .any(|event| event.topic == "transport.runtime.killed"));
+    }
+
+    #[test]
+    #[cfg(feature = "subprocess")]
+    fn subprocess_stdout_candidates_require_policy_admission() {
+        let mut transport = SubprocessTransport::new("test-subprocess", "/bin/cat", vec![]);
+        transport.start().expect("start should succeed");
+        let event = EventEnvelope::new("run-test", "test.topic", "test_plugin", json!({"n": 1}));
+        transport.send(&event).expect("send should succeed");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        transport.send(&event).expect("send should succeed");
+        transport.admit_candidate_events(|_| false);
+        assert!(transport.candidate_events().is_empty());
+        let evidence = transport.take_evidence_events();
+        assert!(evidence
+            .iter()
+            .any(|evt| evt.topic == "policy.runtime.denied"));
         transport.stop().expect("stop should succeed");
     }
 
@@ -880,9 +1159,12 @@ mod tests {
 
     #[test]
     fn test_all_transports_cannot_start_twice() {
-        let mut subprocess = SubprocessTransport::new("test", "/bin/cat", vec![]);
-        subprocess.start().expect("first start");
-        assert!(subprocess.start().is_err());
+        #[cfg(feature = "subprocess")]
+        {
+            let mut subprocess = SubprocessTransport::new("test", "/bin/cat", vec![]);
+            subprocess.start().expect("first start");
+            assert!(subprocess.start().is_err());
+        }
 
         let mut ws = WebSocketTransport::new("test", "ws://localhost:8080");
         ws.start().expect("first start");
