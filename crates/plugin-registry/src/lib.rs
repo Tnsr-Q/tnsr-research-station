@@ -191,6 +191,10 @@ impl PluginRegistry {
         self.plugins.len()
     }
 
+    pub fn plugin(&self, plugin_id: &str) -> Option<&PluginManifest> {
+        self.plugins.get(plugin_id)
+    }
+
     pub fn plugins(&self) -> Vec<&PluginManifest> {
         self.plugins.values().collect()
     }

@@ -1,4 +1,4 @@
-use plugin_registry::PluginRegistry;
+use plugin_registry::{PluginRegistry, TransportKind};
 use runtime_core::EventEnvelope;
 use serde_json::json;
 use station_schema::{SchemaError, SchemaRegistry};
@@ -121,17 +121,36 @@ impl<'a> PolicyEngine<'a> {
             return Ok(EventAdmission::denied(reason, policy_event));
         }
 
-        // 3. Source plugin must be Admitted or Running.
+        // 3. Source plugin must be in a publishable runtime state for its transport kind.
         let Some(state) = self.supervisor.state_of(&event.source) else {
             let reason = format!("plugin {} missing from supervisor runtime", event.source);
             let policy_event = self.create_policy_event(event, false, Some(&reason));
             return Ok(EventAdmission::denied(reason, policy_event));
         };
 
-        if state != PluginRuntimeState::Admitted && state != PluginRuntimeState::Running {
+        let Some(plugin) = self.plugins.plugin(&event.source) else {
+            let reason = format!("plugin not registered: {}", event.source);
+            let policy_event = self.create_policy_event(event, false, Some(&reason));
+            return Ok(EventAdmission::denied(reason, policy_event));
+        };
+
+        let is_publishable_state = match plugin.transport {
+            TransportKind::Local => {
+                state == PluginRuntimeState::Admitted || state == PluginRuntimeState::Running
+            }
+            TransportKind::Subprocess
+            | TransportKind::WebSocket
+            | TransportKind::Grpc
+            | TransportKind::ConnectRpc
+            | TransportKind::Pyro5
+            | TransportKind::Ffi
+            | TransportKind::Wasm => state == PluginRuntimeState::Running,
+        };
+
+        if !is_publishable_state {
             let reason = format!(
-                "plugin {} not in publishable state: {state:?}",
-                event.source
+                "plugin {} with transport {:?} not in publishable state: {state:?}",
+                event.source, plugin.transport
             );
             let policy_event = self.create_policy_event(event, false, Some(&reason));
             return Ok(EventAdmission::denied(reason, policy_event));
@@ -245,6 +264,54 @@ mod tests {
         assert_eq!(policy_event.source, "station_policy");
         assert_eq!(policy_event.trace_id, event.trace_id);
         assert_eq!(policy_event.parent_id.as_ref(), Some(&event.event_id));
+    }
+
+    #[test]
+    fn transport_backed_plugins_require_running_state_for_publish() {
+        let mut manifest = manifest();
+        manifest.id = "adapter_subprocess".to_string();
+        manifest.transport = TransportKind::Subprocess;
+
+        let mut registry = PluginRegistry::default();
+        registry
+            .register(manifest.clone())
+            .expect("register plugin");
+
+        let mut supervisor = StationSupervisor::new("default");
+        supervisor
+            .register_plugin(&manifest)
+            .expect("supervisor register plugin");
+        supervisor
+            .transition(&manifest.id, PluginRuntimeState::Admitted)
+            .expect("admit plugin");
+
+        let mut schemas = SchemaRegistry::default();
+        schemas.register(schema()).expect("register schema");
+
+        let mut event = EventEnvelope::new(
+            supervisor.session.run_id.clone(),
+            "quantum.state",
+            "adapter_subprocess",
+            json!({
+                "state_dim": 16,
+                "collapse_ratio": 0.42,
+                "euler_characteristic": 8
+            }),
+        );
+
+        let admission = PolicyEngine {
+            plugins: &registry,
+            schemas: &schemas,
+            supervisor: &supervisor,
+        }
+        .admit_event(&mut event)
+        .expect("admission should not error");
+
+        assert!(!admission.allowed);
+        assert!(admission
+            .reason
+            .expect("denial reason")
+            .contains("not in publishable state"));
     }
 
     #[test]
