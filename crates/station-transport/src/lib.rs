@@ -424,6 +424,7 @@ impl Transport for SubprocessTransport {
             TransportState::Stopped => Err(TransportError::NotStarted),
             TransportState::Started => {
                 self.pump_sidecar_output();
+                self.child_stdin = None;
                 let mut exit_status: Option<std::process::ExitStatus> = None;
                 let mut timed_out = false;
                 if let Some(child) = self.child.as_mut() {
@@ -438,11 +439,16 @@ impl Transport for SubprocessTransport {
                             child
                                 .kill()
                                 .map_err(|err| TransportError::Other(err.to_string()))?;
+                            let status = child
+                                .wait()
+                                .map_err(|err| TransportError::Other(err.to_string()))?;
+                            exit_status = Some(status);
                             break;
                         }
                         std::thread::sleep(Duration::from_millis(5));
                     }
                 }
+                self.pump_sidecar_output();
                 if let Some(status) = exit_status.filter(|status| !status.success()) {
                     self.evidence_events.push(self.evidence(
                         "transport.runtime.failed",
@@ -1027,6 +1033,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "subprocess")]
+    #[cfg(unix)]
     fn subprocess_emits_timeout_and_kill_evidence() {
         let mut transport =
             SubprocessTransport::new("test-subprocess", "/bin/sleep", vec!["5".into()])
@@ -1044,6 +1051,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "subprocess")]
+    #[cfg(unix)]
     fn subprocess_stdout_candidates_require_policy_admission() {
         let mut transport = SubprocessTransport::new("test-subprocess", "/bin/cat", vec![]);
         transport.start().expect("start should succeed");
