@@ -36,6 +36,12 @@ impl AdmittedEvent {
     pub fn source(&self) -> &str {
         &self.event.source
     }
+
+    pub(crate) fn to_envelope_with_policy_event_id(&self) -> EventEnvelope {
+        let mut event = self.event.clone();
+        event.policy_event_id = Some(self.policy_event_id.clone());
+        event
+    }
 }
 
 pub fn admit_and_record(

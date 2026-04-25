@@ -5,7 +5,9 @@ use runtime_core::{EventEnvelope, PublishReport};
 use serde_json::json;
 use station_run::{RunManifest, RunStatus};
 use station_supervisor::{PluginRuntimeState, SupervisorError};
-use station_transport::{build_transport, TransportConfig, TransportKind as FactoryTransportKind};
+use station_transport::{
+    build_transport, TransportConfig, TransportError, TransportKind as FactoryTransportKind,
+};
 
 use plugin_registry::TransportKind as ManifestTransportKind;
 
@@ -138,8 +140,27 @@ impl KernelRuntime {
             args: vec![],
         };
 
-        let mut transport = build_transport(&transport_config)?;
-        transport.start()?;
+        let mut transport = build_transport(&transport_config).map_err(|err| {
+            let _ = self.record_transport_failed(
+                plugin_id,
+                "factory",
+                transport_config.id.as_str(),
+                err.to_string(),
+            );
+            KernelError::Transport(err)
+        })?;
+        transport.start().map_err(|err| {
+            let _ = self.record_transport_failed(
+                plugin_id,
+                "start",
+                transport_config.id.as_str(),
+                err.to_string(),
+            );
+            KernelError::Transport(err)
+        })?;
+        self.context
+            .transports
+            .insert(plugin_id.to_string(), transport);
 
         let running_transition = self
             .context
@@ -176,6 +197,15 @@ impl KernelRuntime {
             }
         }
 
+        if let Some(mut transport) = self.context.transports.remove(plugin_id) {
+            let transport_id = transport.id().to_string();
+            transport.stop().map_err(|err| {
+                let _ =
+                    self.record_transport_failed(plugin_id, "stop", &transport_id, err.to_string());
+                KernelError::Transport(err)
+            })?;
+        }
+
         let stopped_transition = self
             .context
             .supervisor
@@ -183,6 +213,30 @@ impl KernelRuntime {
         self.context.replay.append_record(&stopped_transition)?;
 
         Ok(())
+    }
+
+    pub fn send_to_plugin(
+        &mut self,
+        plugin_id: &str,
+        admitted: &AdmittedEvent,
+    ) -> Result<(), KernelError> {
+        if !self.context.transports.contains_key(plugin_id) {
+            let reason = "transport not active";
+            let transport_id = format!("plugin:{plugin_id}");
+            let _ = self.record_transport_failed(plugin_id, "send", &transport_id, reason);
+            return Err(KernelError::Transport(TransportError::NotStarted));
+        }
+        let transport = self
+            .context
+            .transports
+            .get_mut(plugin_id)
+            .expect("transport existence checked");
+        let transport_id = transport.id().to_string();
+        let event = admitted.to_envelope_with_policy_event_id();
+        transport.send(&event).map_err(|err| {
+            let _ = self.record_transport_failed(plugin_id, "send", &transport_id, err.to_string());
+            KernelError::Transport(err)
+        })
     }
 
     pub fn seal_run(self, status: RunStatus) -> Result<RunManifest, KernelError> {
@@ -203,6 +257,28 @@ impl KernelRuntime {
 
     pub fn run_id(&self) -> String {
         self.context.supervisor.session.run_id.clone()
+    }
+
+    fn record_transport_failed(
+        &mut self,
+        plugin_id: &str,
+        stage: &str,
+        transport_id: &str,
+        reason: impl Into<String>,
+    ) -> Result<(), KernelError> {
+        let evidence = EventEnvelope::new(
+            self.run_id(),
+            "transport.runtime.failed",
+            "station_kernel",
+            json!({
+                "plugin_id": plugin_id,
+                "stage": stage,
+                "transport_id": transport_id,
+                "reason": reason.into(),
+            }),
+        );
+        self.context.replay.append_record(&evidence)?;
+        Ok(())
     }
 }
 
@@ -250,6 +326,51 @@ mod tests {
             .parent()
             .expect("workspace root")
             .join("profiles/default.profile.json")
+    }
+
+    fn register_admitted_plugin(
+        runtime: &mut KernelRuntime,
+        plugin_id: &str,
+        transport: TransportKind,
+    ) {
+        let manifest = PluginManifest {
+            id: plugin_id.to_string(),
+            kind: PluginKind::Compute,
+            transport,
+            version: "0.1.0".to_string(),
+            artifact_hash:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                    .to_string(),
+            subscribes: vec![],
+            publishes: vec!["quantum.state".to_string()],
+            capabilities: vec![],
+            capability_claims: vec![],
+        };
+        runtime
+            .context
+            .registry
+            .register(manifest.clone())
+            .expect("register plugin");
+        let registered_event = runtime
+            .context
+            .supervisor
+            .register_plugin(&manifest)
+            .expect("register plugin with supervisor");
+        runtime
+            .context
+            .replay
+            .append_record(&registered_event)
+            .expect("append registered event");
+        let admitted_event = runtime
+            .context
+            .supervisor
+            .transition(plugin_id, PluginRuntimeState::Admitted)
+            .expect("admit plugin");
+        runtime
+            .context
+            .replay
+            .append_record(&admitted_event)
+            .expect("append admitted event");
     }
 
     #[test]
@@ -318,52 +439,15 @@ mod tests {
     }
 
     #[test]
-    fn start_plugin_records_transition_before_transport_use() {
+    fn start_plugin_stores_active_transport() {
         let mut runtime =
             KernelRuntime::from_profile_path(root_profile_path()).expect("runtime should init");
-
-        let manifest = PluginManifest {
-            id: "test_local".to_string(),
-            kind: PluginKind::Compute,
-            transport: TransportKind::Local,
-            version: "0.1.0".to_string(),
-            artifact_hash:
-                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-                    .to_string(),
-            subscribes: vec![],
-            publishes: vec!["quantum.state".to_string()],
-            capabilities: vec![],
-            capability_claims: vec![],
-        };
-        runtime
-            .context
-            .registry
-            .register(manifest.clone())
-            .expect("register plugin");
-        let registered_event = runtime
-            .context
-            .supervisor
-            .register_plugin(&manifest)
-            .expect("register plugin with supervisor");
-        runtime
-            .context
-            .replay
-            .append_record(&registered_event)
-            .expect("append registered event");
-        let admitted_event = runtime
-            .context
-            .supervisor
-            .transition("test_local", PluginRuntimeState::Admitted)
-            .expect("admit plugin");
-        runtime
-            .context
-            .replay
-            .append_record(&admitted_event)
-            .expect("append admitted event");
+        register_admitted_plugin(&mut runtime, "test_local", TransportKind::Local);
 
         runtime
             .start_plugin("test_local")
             .expect("local plugin should start");
+        assert!(runtime.context.transports.contains_key("test_local"));
 
         let events = JsonlReplayLog::read_all_events(runtime.context.events_path.clone())
             .expect("events should be readable");
@@ -392,55 +476,19 @@ mod tests {
     }
 
     #[test]
-    fn stop_plugin_records_stopping_and_stopped_transitions() {
+    fn stop_plugin_removes_active_transport() {
         let mut runtime =
             KernelRuntime::from_profile_path(root_profile_path()).expect("runtime should init");
-
-        let manifest = PluginManifest {
-            id: "test_local_stop".to_string(),
-            kind: PluginKind::Compute,
-            transport: TransportKind::Local,
-            version: "0.1.0".to_string(),
-            artifact_hash:
-                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-                    .to_string(),
-            subscribes: vec![],
-            publishes: vec!["quantum.state".to_string()],
-            capabilities: vec![],
-            capability_claims: vec![],
-        };
-        runtime
-            .context
-            .registry
-            .register(manifest.clone())
-            .expect("register plugin");
-        let registered_event = runtime
-            .context
-            .supervisor
-            .register_plugin(&manifest)
-            .expect("register plugin with supervisor");
-        runtime
-            .context
-            .replay
-            .append_record(&registered_event)
-            .expect("append registered event");
-        let admitted_event = runtime
-            .context
-            .supervisor
-            .transition("test_local_stop", PluginRuntimeState::Admitted)
-            .expect("admit plugin");
-        runtime
-            .context
-            .replay
-            .append_record(&admitted_event)
-            .expect("append admitted event");
+        register_admitted_plugin(&mut runtime, "test_local_stop", TransportKind::Local);
 
         runtime
             .start_plugin("test_local_stop")
             .expect("local plugin should start");
+        assert!(runtime.context.transports.contains_key("test_local_stop"));
         runtime
             .stop_plugin("test_local_stop")
             .expect("plugin should stop");
+        assert!(!runtime.context.transports.contains_key("test_local_stop"));
 
         let events = JsonlReplayLog::read_all_events(runtime.context.events_path.clone())
             .expect("events should be readable");
@@ -454,6 +502,158 @@ mod tests {
                 && event.payload["plugin_id"] == "test_local_stop"
                 && event.payload["to"] == "Stopped"
         }));
+
+        let _ = fs::remove_dir_all(runtime.run_dir());
+    }
+
+    #[test]
+    fn stop_plugin_stops_transport_before_stopped_transition() {
+        let mut runtime =
+            KernelRuntime::from_profile_path(root_profile_path()).expect("runtime should init");
+        register_admitted_plugin(&mut runtime, "test_local_order", TransportKind::Local);
+        runtime
+            .start_plugin("test_local_order")
+            .expect("local plugin should start");
+        runtime
+            .stop_plugin("test_local_order")
+            .expect("plugin should stop");
+
+        let events = JsonlReplayLog::read_all_events(runtime.context.events_path.clone())
+            .expect("events should be readable");
+        let stopping_index = events
+            .iter()
+            .position(|event| {
+                event.topic == "supervisor.plugin.transition"
+                    && event.payload["plugin_id"] == "test_local_order"
+                    && event.payload["to"] == "Stopping"
+            })
+            .expect("stopping transition should be present");
+        let stopped_index = events
+            .iter()
+            .position(|event| {
+                event.topic == "supervisor.plugin.transition"
+                    && event.payload["plugin_id"] == "test_local_order"
+                    && event.payload["to"] == "Stopped"
+            })
+            .expect("stopped transition should be present");
+        assert!(stopping_index < stopped_index);
+        assert!(!runtime.context.transports.contains_key("test_local_order"));
+
+        let _ = fs::remove_dir_all(runtime.run_dir());
+    }
+
+    #[test]
+    fn starting_non_enabled_transport_records_denial_or_transport_error_evidence() {
+        let mut runtime =
+            KernelRuntime::from_profile_path(root_profile_path()).expect("runtime should init");
+        register_admitted_plugin(&mut runtime, "test_wasm", TransportKind::Wasm);
+
+        let result = runtime.start_plugin("test_wasm");
+        assert!(matches!(result, Err(KernelError::Transport(_))));
+
+        let events = JsonlReplayLog::read_all_events(runtime.context.events_path.clone())
+            .expect("events should be readable");
+        assert!(events.iter().any(|event| {
+            event.topic == "transport.runtime.failed"
+                && event.payload["plugin_id"] == "test_wasm"
+                && event.payload["reason"] == "transport error: transport kind not enabled"
+        }));
+        assert!(
+            !events.iter().any(|event| {
+                event.topic == "supervisor.plugin.transition"
+                    && event.payload["plugin_id"] == "test_wasm"
+                    && event.payload["to"] == "Running"
+            }),
+            "transport failures must not transition plugin to Running"
+        );
+
+        let _ = fs::remove_dir_all(runtime.run_dir());
+    }
+
+    #[test]
+    fn cannot_send_to_plugin_before_start() {
+        let mut runtime =
+            KernelRuntime::from_profile_path(root_profile_path()).expect("runtime should init");
+        runtime
+            .register_plugins()
+            .expect("plugins should register successfully");
+        runtime
+            .register_schemas()
+            .expect("schemas should register successfully");
+
+        let event = quantum_state_event(runtime.run_id());
+        let admitted = runtime
+            .admit(event)
+            .expect("admission should return result")
+            .expect("event should be admitted");
+        let send_result = runtime.send_to_plugin("adapter_quantum", &admitted);
+        assert!(matches!(
+            send_result,
+            Err(KernelError::Transport(TransportError::NotStarted))
+        ));
+
+        let events = JsonlReplayLog::read_all_events(runtime.context.events_path.clone())
+            .expect("events should be readable");
+        assert!(events.iter().any(|event| {
+            event.topic == "transport.runtime.failed"
+                && event.payload["plugin_id"] == "adapter_quantum"
+                && event.payload["stage"] == "send"
+        }));
+
+        let _ = fs::remove_dir_all(runtime.run_dir());
+    }
+
+    #[test]
+    fn can_send_to_local_plugin_after_start() {
+        let mut runtime =
+            KernelRuntime::from_profile_path(root_profile_path()).expect("runtime should init");
+        register_admitted_plugin(&mut runtime, "test_local_send", TransportKind::Local);
+        runtime
+            .start_plugin("test_local_send")
+            .expect("local plugin should start");
+
+        let event = EventEnvelope::new(
+            runtime.run_id(),
+            "quantum.state",
+            "test_local_send",
+            json!({"phase":"stable"}),
+        );
+        let admitted = AdmittedEvent::new(event, "policy-event-id".to_string());
+        runtime
+            .send_to_plugin("test_local_send", &admitted)
+            .expect("send to local plugin should succeed");
+
+        let events = JsonlReplayLog::read_all_events(runtime.context.events_path.clone())
+            .expect("events should be readable");
+        assert!(!events.iter().any(|event| {
+            event.topic == "transport.runtime.failed"
+                && event.payload["plugin_id"] == "test_local_send"
+        }));
+
+        let _ = fs::remove_dir_all(runtime.run_dir());
+    }
+
+    #[test]
+    fn transport_error_is_recorded_as_replay_evidence() {
+        let mut runtime =
+            KernelRuntime::from_profile_path(root_profile_path()).expect("runtime should init");
+        register_admitted_plugin(&mut runtime, "test_bad_transport", TransportKind::Wasm);
+
+        let result = runtime.start_plugin("test_bad_transport");
+        assert!(matches!(result, Err(KernelError::Transport(_))));
+
+        let events = JsonlReplayLog::read_all_events(runtime.context.events_path.clone())
+            .expect("events should be readable");
+        let failure_event = events
+            .iter()
+            .find(|event| event.topic == "transport.runtime.failed")
+            .expect("transport failure evidence should be present");
+        assert_eq!(failure_event.source, "station_kernel");
+        assert_eq!(failure_event.payload["plugin_id"], "test_bad_transport");
+        assert_eq!(
+            failure_event.payload["transport_id"],
+            "plugin:test_bad_transport"
+        );
 
         let _ = fs::remove_dir_all(runtime.run_dir());
     }
