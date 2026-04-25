@@ -1,0 +1,9 @@
+{
+  "id": "tnsr.echo.output.v1",
+  "topic": "echo.output",
+  "version": "1",
+  "required_fields": [
+    ["message", "String"],
+    ["echoed", "Boolean"]
+  ]
+}

@@ -591,7 +591,10 @@ mod tests {
         let profile_dir = PathBuf::from("/tmp/workspace/profile");
         let result = resolve_bounded_working_dir(Some("runtime"), &profile_dir)
             .expect("profile-relative working_dir should be accepted");
-        assert_eq!(result, Some(PathBuf::from("/tmp/workspace/profile/runtime")));
+        assert_eq!(
+            result,
+            Some(PathBuf::from("/tmp/workspace/profile/runtime"))
+        );
     }
 
     #[cfg(all(feature = "subprocess", unix))]
