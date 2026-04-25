@@ -1234,14 +1234,25 @@ mod tests {
         runtime
             .send_to_plugin("test_subprocess_allowed", &admitted)
             .expect("send should succeed");
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        runtime
-            .send_to_plugin("test_subprocess_allowed", &admitted)
-            .expect("send should succeed");
 
-        let admitted_events = runtime
-            .drain_plugin_outputs("test_subprocess_allowed")
-            .expect("drain should succeed");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let mut admitted_events = Vec::new();
+        loop {
+            let mut drained = runtime
+                .drain_plugin_outputs("test_subprocess_allowed")
+                .expect("drain should succeed");
+            admitted_events.append(&mut drained);
+
+            if admitted_events.iter().any(|event| event.topic() == "quantum.state") {
+                break;
+            }
+
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         assert_eq!(admitted_events.len(), 1);
         assert_eq!(admitted_events[0].topic(), "quantum.state");
     }
