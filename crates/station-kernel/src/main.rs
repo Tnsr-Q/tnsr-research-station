@@ -110,6 +110,51 @@ fn build_artifact_summaries(ledger: &ArtifactLedger) -> Vec<ArtifactSummary> {
     artifacts
 }
 
+fn build_run_manifest(
+    run_id: String,
+    profile_name: String,
+    status: RunStatus,
+    started_at_ms: u128,
+    events_path: &std::path::Path,
+    registry: &PluginRegistry,
+    schemas: &SchemaRegistry,
+    ledger: &ArtifactLedger,
+    failure_reason: Option<String>,
+) -> Result<RunManifest, Box<dyn std::error::Error>> {
+    let (records_verified, last_hash, verification_error) =
+        match JsonlReplayLog::verify_chain(events_path) {
+            Ok(report) => (report.records_verified, report.last_record_hash, None),
+            Err(err) => (0, None, Some(err.to_string())),
+        };
+
+    let plugins = build_plugin_summaries(registry);
+    let schema_summaries = build_schema_summaries(schemas);
+    let artifacts = build_artifact_summaries(ledger);
+
+    let replay_valid = verification_error.is_none();
+
+    Ok(RunManifest {
+        run_id,
+        profile_name,
+        status,
+        event_log_path: "events.jsonl".into(),
+        manifest_path: "manifest.json".into(),
+        started_at_ms,
+        completed_at_ms: Some(now_ms()?),
+        records_verified,
+        last_record_hash: last_hash,
+        replay_valid,
+        verification_error,
+        failure_reason,
+        plugin_count: plugins.len(),
+        schema_count: schema_summaries.len(),
+        artifact_count: artifacts.len(),
+        plugins,
+        schemas: schema_summaries,
+        artifacts,
+    })
+}
+
 fn main() {
     station_telemetry::init();
     if let Err(err) = run() {
@@ -197,37 +242,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             admission.reason.as_deref().unwrap_or("unknown reason")
         );
         // Write manifest and exit without panic
-        let verification_result = JsonlReplayLog::verify_chain(&events_path);
-        let (records_verified, last_hash, verification_error) = match verification_result {
-            Ok(report) => (report.records_verified, report.last_record_hash, None),
-            Err(err) => (0, None, Some(err.to_string())),
-        };
-
-        let plugins = build_plugin_summaries(&registry);
-        let schema_summaries = build_schema_summaries(&schemas);
-
-        let replay_valid = verification_error.is_none();
-
-        let manifest = RunManifest {
+        let manifest = build_run_manifest(
             run_id,
             profile_name,
-            status: RunStatus::Failed,
-            event_log_path: "events.jsonl".into(),
-            manifest_path: "manifest.json".into(),
+            RunStatus::Failed,
             started_at_ms,
-            completed_at_ms: Some(now_ms()?),
-            records_verified,
-            last_record_hash: last_hash,
-            replay_valid,
-            verification_error,
-            failure_reason: admission.reason,
-            plugin_count: plugins.len(),
-            schema_count: schema_summaries.len(),
-            artifact_count: 0,
-            plugins,
-            schemas: schema_summaries,
-            artifacts: vec![],
-        };
+            &events_path,
+            &registry,
+            &schemas,
+            &ledger,
+            admission.reason,
+        )?;
 
         write_manifest_json(&manifest, &manifest_path)?;
         println!("Run sealed with policy denial: {}", manifest_path.display());
@@ -259,42 +284,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("ledger entries: {}", ledger.records().len());
 
     // 10. Verification & Manifest Generation
-    let (records_verified, last_hash, verification_error) =
-        match JsonlReplayLog::verify_chain(&events_path) {
-            Ok(report) => (report.records_verified, report.last_record_hash, None),
-            Err(err) => (0, None, Some(err.to_string())),
-        };
+    let status = if JsonlReplayLog::verify_chain(&events_path).is_ok() {
+        RunStatus::Completed
+    } else {
+        RunStatus::Failed
+    };
 
-    let plugins = build_plugin_summaries(&registry);
-    let schema_summaries = build_schema_summaries(&schemas);
-    let artifacts = build_artifact_summaries(&ledger);
-
-    let replay_valid = verification_error.is_none();
-
-    let manifest = RunManifest {
+    let manifest = build_run_manifest(
         run_id,
         profile_name,
-        status: if replay_valid {
-            RunStatus::Completed
-        } else {
-            RunStatus::Failed
-        },
-        event_log_path: "events.jsonl".into(),
-        manifest_path: "manifest.json".into(),
+        status,
         started_at_ms,
-        completed_at_ms: Some(now_ms()?),
-        records_verified,
-        last_record_hash: last_hash,
-        replay_valid,
-        verification_error,
-        failure_reason: None,
-        plugin_count: plugins.len(),
-        schema_count: schema_summaries.len(),
-        artifact_count: artifacts.len(),
-        plugins,
-        schemas: schema_summaries,
-        artifacts,
-    };
+        &events_path,
+        &registry,
+        &schemas,
+        &ledger,
+        None,
+    )?;
 
     write_manifest_json(&manifest, &manifest_path)?;
     println!("Run sealed: {}", manifest_path.display());
