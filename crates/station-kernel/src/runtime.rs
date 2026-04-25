@@ -357,6 +357,7 @@ fn supervisor_denial_kind(denial: &SupervisorError) -> &'static str {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::PathBuf;
 
     use adapter_quantum::quantum_state_event;
     use plugin_registry::{PluginKind, PluginManifest, TransportKind};
@@ -364,6 +365,20 @@ mod tests {
     use station_run::RunStatus;
 
     use super::*;
+
+    struct RunDirCleanup(PathBuf);
+
+    impl RunDirCleanup {
+        fn track(runtime: &KernelRuntime) -> Self {
+            Self(runtime.run_dir().to_path_buf())
+        }
+    }
+
+    impl Drop for RunDirCleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
 
     fn root_profile_path() -> std::path::PathBuf {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -816,10 +831,12 @@ mod tests {
         let _ = fs::remove_dir_all(runtime.run_dir());
     }
 
+    #[cfg(unix)]
     #[test]
     fn replay_append_failure_during_transport_failure_is_not_swallowed() {
         let mut runtime =
             KernelRuntime::from_profile_path(root_profile_path()).expect("runtime should init");
+        let _run_dir_cleanup = RunDirCleanup::track(&runtime);
         register_admitted_plugin_with_topics(
             &mut runtime,
             "test_local_replay_failure",
