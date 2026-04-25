@@ -34,7 +34,9 @@ tnsr-research-station/
 ├── profiles/                       # Run profile configurations
 │   └── default.profile.json
 ├── schemas/                        # Payload schema definitions
-│   └── quantum-state.schema.json
+│   ├── quantum-state.schema.json
+│   ├── rag-result.schema.json
+│   └── plugin-capability.schema.json
 ├── proto/                          # Protocol buffer definitions
 │   └── tnsr_event_v1.proto
 └── runs/                           # Run output directories
@@ -135,6 +137,7 @@ runs/<run_id>/
 **Features:**
 - `PayloadSchema` - declarative field requirements
 - `SchemaRegistry` - centralized schema management
+- Supported primitive/container field types: `Integer`, `Number`, `String`, `Boolean`, `Object`, `Array`
 - Schema hash generation (SHA256)
 - Automatic schema hash attachment to events
 - Required-field validation

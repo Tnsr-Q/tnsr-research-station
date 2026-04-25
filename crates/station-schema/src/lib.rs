@@ -10,6 +10,9 @@ pub enum FieldType {
     Integer,
     Number,
     String,
+    Boolean,
+    Object,
+    Array,
 }
 
 #[derive(Debug, Clone)]
@@ -45,7 +48,9 @@ pub enum SchemaError {
     #[error("event topic {topic} missing required field: {field}")]
     MissingRequiredField { topic: String, field: String },
 
-    #[error("event topic {topic} field {field} has wrong type: expected {expected:?}, found {found:?}")]
+    #[error(
+        "event topic {topic} field {field} has wrong type: expected {expected:?}, found {found:?}"
+    )]
     WrongFieldType {
         topic: String,
         field: String,
@@ -62,7 +67,11 @@ pub enum SchemaError {
 }
 
 impl PayloadSchema {
-    pub fn new(id: impl Into<String>, topic: impl Into<String>, version: impl Into<String>) -> Self {
+    pub fn new(
+        id: impl Into<String>,
+        topic: impl Into<String>,
+        version: impl Into<String>,
+    ) -> Self {
         Self {
             id: id.into(),
             topic: topic.into(),
@@ -172,6 +181,9 @@ fn matches_type(value: &Value, expected_type: &FieldType) -> bool {
         FieldType::Integer => value.is_i64() || value.is_u64(),
         FieldType::Number => value.is_f64() || value.is_i64() || value.is_u64(),
         FieldType::String => value.is_string(),
+        FieldType::Boolean => value.is_boolean(),
+        FieldType::Object => value.is_object(),
+        FieldType::Array => value.is_array(),
     }
 }
 
@@ -205,10 +217,15 @@ pub fn load_schema_json(path: impl AsRef<Path>) -> Result<PayloadSchema, SchemaE
             "Integer" => FieldType::Integer,
             "Number" => FieldType::Number,
             "String" => FieldType::String,
-            _ => return Err(SchemaError::MissingSchema(format!(
-                "Unknown field type: {}",
-                field_type_str
-            ))),
+            "Boolean" => FieldType::Boolean,
+            "Object" => FieldType::Object,
+            "Array" => FieldType::Array,
+            _ => {
+                return Err(SchemaError::MissingSchema(format!(
+                    "Unknown field type: {}",
+                    field_type_str
+                )))
+            }
         };
         builder = builder.required(field_name, field_type);
     }
@@ -232,6 +249,9 @@ pub fn write_schema_json(
                     FieldType::Integer => "Integer",
                     FieldType::Number => "Number",
                     FieldType::String => "String",
+                    FieldType::Boolean => "Boolean",
+                    FieldType::Object => "Object",
+                    FieldType::Array => "Array",
                 };
                 (name.clone(), type_str.to_string())
             })
@@ -239,8 +259,9 @@ pub fn write_schema_json(
     };
 
     if let Some(parent) = path.as_ref().parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| SchemaError::MissingSchema(format!("Failed to create directory: {}", e)))?;
+        fs::create_dir_all(parent).map_err(|e| {
+            SchemaError::MissingSchema(format!("Failed to create directory: {}", e))
+        })?;
     }
 
     let json = serde_json::to_string_pretty(&schema_file)
@@ -422,7 +443,9 @@ mod tests {
             .expect("attach schema hash");
 
         // This should pass without error
-        registry.validate(&event).expect("valid payload should pass");
+        registry
+            .validate(&event)
+            .expect("valid payload should pass");
     }
 
     #[test]
@@ -470,7 +493,9 @@ mod tests {
             .attach_schema_hash(&mut event)
             .expect("attach schema hash");
 
-        registry.validate(&event).expect("valid string field should pass");
+        registry
+            .validate(&event)
+            .expect("valid string field should pass");
     }
 
     #[test]
@@ -501,5 +526,160 @@ mod tests {
             .expect_err("integer instead of string should fail");
 
         assert!(matches!(err, SchemaError::WrongFieldType { .. }));
+    }
+
+    #[test]
+    fn test_boolean_field_validates() {
+        let mut registry = SchemaRegistry::default();
+
+        let schema = PayloadSchema::new("tnsr.plugin.capability.v1", "plugin.capability", "1")
+            .required("enabled", FieldType::Boolean)
+            .build();
+
+        registry.register(schema).expect("register schema");
+
+        let mut event = EventEnvelope::new(
+            "run-test",
+            "plugin.capability",
+            "adapter_rag",
+            json!({
+                "enabled": true
+            }),
+        );
+
+        registry
+            .attach_schema_hash(&mut event)
+            .expect("attach schema hash");
+
+        registry
+            .validate(&event)
+            .expect("valid boolean field should pass");
+    }
+
+    #[test]
+    fn test_boolean_field_wrong_type_fails() {
+        let mut registry = SchemaRegistry::default();
+
+        let schema = PayloadSchema::new("tnsr.plugin.capability.v1", "plugin.capability", "1")
+            .required("enabled", FieldType::Boolean)
+            .build();
+
+        registry.register(schema).expect("register schema");
+
+        let mut event = EventEnvelope::new(
+            "run-test",
+            "plugin.capability",
+            "adapter_rag",
+            json!({
+                "enabled": "true"
+            }),
+        );
+
+        registry
+            .attach_schema_hash(&mut event)
+            .expect("attach schema hash");
+
+        let err = registry
+            .validate(&event)
+            .expect_err("string instead of boolean should fail");
+
+        assert!(matches!(err, SchemaError::WrongFieldType { .. }));
+    }
+
+    #[test]
+    fn test_object_field_validates() {
+        let mut registry = SchemaRegistry::default();
+
+        let schema = PayloadSchema::new("tnsr.plugin.capability.v1", "plugin.capability", "1")
+            .required("claims", FieldType::Object)
+            .build();
+
+        registry.register(schema).expect("register schema");
+
+        let mut event = EventEnvelope::new(
+            "run-test",
+            "plugin.capability",
+            "adapter_rag",
+            json!({
+                "claims": { "deterministic": true }
+            }),
+        );
+
+        registry
+            .attach_schema_hash(&mut event)
+            .expect("attach schema hash");
+
+        registry
+            .validate(&event)
+            .expect("valid object field should pass");
+    }
+
+    #[test]
+    fn test_array_field_validates() {
+        let mut registry = SchemaRegistry::default();
+
+        let schema = PayloadSchema::new("tnsr.plugin.capability.v1", "plugin.capability", "1")
+            .required("supported_topics", FieldType::Array)
+            .build();
+
+        registry.register(schema).expect("register schema");
+
+        let mut event = EventEnvelope::new(
+            "run-test",
+            "plugin.capability",
+            "adapter_rag",
+            json!({
+                "supported_topics": ["quantum.state", "rag.result"]
+            }),
+        );
+
+        registry
+            .attach_schema_hash(&mut event)
+            .expect("attach schema hash");
+
+        registry
+            .validate(&event)
+            .expect("valid array field should pass");
+    }
+
+    #[test]
+    fn test_schema_hash_changes_when_boolean_field_added() {
+        let schema_without_boolean =
+            PayloadSchema::new("tnsr.plugin.capability.v1", "plugin.capability", "1")
+                .required("name", FieldType::String)
+                .build();
+
+        let schema_with_boolean =
+            PayloadSchema::new("tnsr.plugin.capability.v1", "plugin.capability", "1")
+                .required("name", FieldType::String)
+                .required("enabled", FieldType::Boolean)
+                .build();
+
+        assert_ne!(
+            schema_without_boolean.schema_hash, schema_with_boolean.schema_hash,
+            "schema hash should change when boolean field is added"
+        );
+    }
+
+    #[test]
+    fn test_unknown_field_type_is_rejected() {
+        let path = std::env::temp_dir().join("tnsr-schema-invalid-type.json");
+        std::fs::write(
+            &path,
+            r#"{
+  "id": "tnsr.invalid.v1",
+  "topic": "invalid.topic",
+  "version": "1",
+  "required_fields": [["enabled", "Flag"]]
+}"#,
+        )
+        .expect("write invalid schema");
+
+        let err = load_schema_json(&path).expect_err("unknown field type should fail");
+        assert!(
+            matches!(err, SchemaError::MissingSchema(message) if message.contains("Unknown field type: Flag"))
+        );
+
+        let _ = std::fs::remove_file(path);
     }
 }

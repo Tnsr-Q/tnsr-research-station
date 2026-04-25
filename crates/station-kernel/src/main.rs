@@ -10,7 +10,8 @@ use runtime_core::EventBus;
 use station_policy::PolicyEngine;
 use station_replay::JsonlReplayLog;
 use station_run::{
-    load_run_profile_json, write_manifest_json, ArtifactSummary, PluginSummary, RunManifest, RunStatus, SchemaSummary,
+    load_run_profile_json, write_manifest_json, ArtifactSummary, PluginSummary, RunManifest,
+    RunStatus, SchemaSummary,
 };
 use station_schema::{load_schema_json, FieldType, SchemaRegistry};
 use station_supervisor::{PluginRuntimeState, StationSupervisor};
@@ -80,6 +81,9 @@ fn build_schema_summaries(schemas: &SchemaRegistry) -> Vec<SchemaSummary> {
                         FieldType::Integer => "Integer",
                         FieldType::Number => "Number",
                         FieldType::String => "String",
+                        FieldType::Boolean => "Boolean",
+                        FieldType::Object => "Object",
+                        FieldType::Array => "Array",
                     };
                     (name.clone(), type_str.to_string())
                 })
