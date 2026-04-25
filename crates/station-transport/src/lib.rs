@@ -552,10 +552,14 @@ impl Transport for SubprocessTransport {
     }
 
     fn drain_candidate_events(&mut self) -> Vec<EventEnvelope> {
+        self.pump_sidecar_output();
+        self.check_child_status();
         std::mem::take(&mut self.candidate_events)
     }
 
     fn drain_evidence_events(&mut self) -> Vec<EventEnvelope> {
+        self.pump_sidecar_output();
+        self.check_child_status();
         self.take_evidence_events()
     }
 }

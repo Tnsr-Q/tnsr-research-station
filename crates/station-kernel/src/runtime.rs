@@ -515,6 +515,44 @@ mod tests {
             .expect("append admitted event");
     }
 
+    #[cfg(feature = "subprocess")]
+    fn drain_plugin_outputs_until_activity(
+        runtime: &mut KernelRuntime,
+        plugin_id: &str,
+        timeout: std::time::Duration,
+    ) -> Vec<AdmittedEvent> {
+        let deadline = std::time::Instant::now() + timeout;
+        let mut admitted_events = Vec::new();
+
+        loop {
+            let mut drained = runtime
+                .drain_plugin_outputs(plugin_id)
+                .expect("drain should succeed");
+            admitted_events.append(&mut drained);
+
+            if !admitted_events.is_empty() {
+                break;
+            }
+
+            let replay_events = JsonlReplayLog::read_all_events(runtime.context.events_path.clone())
+                .expect("events should be readable");
+            if replay_events
+                .iter()
+                .any(|event| event.topic == "policy.event.denied")
+            {
+                break;
+            }
+
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        admitted_events
+    }
+
     #[test]
     fn runtime_can_register_plugins_and_schemas() {
         let mut runtime =
@@ -1175,14 +1213,11 @@ mod tests {
         runtime
             .send_to_plugin("test_subprocess_denied", &admitted)
             .expect("send should succeed");
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        runtime
-            .send_to_plugin("test_subprocess_denied", &admitted)
-            .expect("send should succeed");
-
-        let admitted_events = runtime
-            .drain_plugin_outputs("test_subprocess_denied")
-            .expect("drain should succeed");
+        let admitted_events = drain_plugin_outputs_until_activity(
+            &mut runtime,
+            "test_subprocess_denied",
+            std::time::Duration::from_secs(1),
+        );
         assert!(admitted_events.is_empty());
 
         let events = JsonlReplayLog::read_all_events(runtime.context.events_path.clone())
@@ -1234,25 +1269,11 @@ mod tests {
         runtime
             .send_to_plugin("test_subprocess_allowed", &admitted)
             .expect("send should succeed");
-
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
-        let mut admitted_events = Vec::new();
-        loop {
-            let mut drained = runtime
-                .drain_plugin_outputs("test_subprocess_allowed")
-                .expect("drain should succeed");
-            admitted_events.append(&mut drained);
-
-            if admitted_events.iter().any(|event| event.topic() == "quantum.state") {
-                break;
-            }
-
-            if std::time::Instant::now() >= deadline {
-                break;
-            }
-
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        let admitted_events = drain_plugin_outputs_until_activity(
+            &mut runtime,
+            "test_subprocess_allowed",
+            std::time::Duration::from_secs(1),
+        );
         assert_eq!(admitted_events.len(), 1);
         assert_eq!(admitted_events[0].topic(), "quantum.state");
     }
