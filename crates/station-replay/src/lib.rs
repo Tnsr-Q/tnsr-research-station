@@ -4,6 +4,7 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::os::fd::FromRawFd;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, thiserror::Error)]
@@ -170,6 +171,23 @@ impl JsonlReplayLog {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub fn debug_set_broken_writer(&mut self) -> Result<(), ReplayError> {
+        let mut pipe_fds = [0; 2];
+        let rc = unsafe { libc::pipe(pipe_fds.as_mut_ptr()) };
+        if rc != 0 {
+            return Err(ReplayError::Io(std::io::Error::last_os_error()));
+        }
+
+        let close_rc = unsafe { libc::close(pipe_fds[0]) };
+        if close_rc != 0 {
+            return Err(ReplayError::Io(std::io::Error::last_os_error()));
+        }
+
+        let write_end = unsafe { File::from_raw_fd(pipe_fds[1]) };
+        self.writer = BufWriter::new(write_end);
+        Ok(())
     }
 }
 

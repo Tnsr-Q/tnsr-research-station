@@ -921,6 +921,7 @@ dependencies = [
 name = "station_replay"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "runtime_core",
  "serde",
  "serde_json",

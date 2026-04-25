@@ -110,18 +110,12 @@ impl KernelRuntime {
         {
             Ok(transition_event) => transition_event,
             Err(denial) => {
-                let evidence = EventEnvelope::new(
-                    self.run_id(),
-                    "policy.runtime.denied",
-                    "station_kernel",
-                    json!({
-                        "plugin_id": plugin_id,
-                        "target_state": "Starting",
-                        "denial": supervisor_denial_kind(&denial),
-                        "reason": denial.to_string(),
-                    }),
-                );
-                self.context.replay.append_record(&evidence)?;
+                self.record_runtime_denied(
+                    plugin_id,
+                    "Starting",
+                    supervisor_denial_kind(&denial),
+                    denial.to_string(),
+                )?;
                 return Err(KernelError::Supervisor(denial));
             }
         };
@@ -140,24 +134,30 @@ impl KernelRuntime {
             args: vec![],
         };
 
-        let mut transport = build_transport(&transport_config).map_err(|err| {
-            let _ = self.record_transport_failed(
-                plugin_id,
-                "factory",
-                transport_config.id.as_str(),
-                err.to_string(),
-            );
-            KernelError::Transport(err)
-        })?;
-        transport.start().map_err(|err| {
-            let _ = self.record_transport_failed(
+        let mut transport = match build_transport(&transport_config) {
+            Ok(transport) => transport,
+            Err(err) => {
+                self.record_transport_failed(
+                    plugin_id,
+                    "factory",
+                    transport_config.id.as_str(),
+                    err.to_string(),
+                )?;
+                self.transition_plugin_failed(plugin_id)?;
+                return Err(KernelError::Transport(err));
+            }
+        };
+
+        if let Err(err) = transport.start() {
+            self.record_transport_failed(
                 plugin_id,
                 "start",
                 transport_config.id.as_str(),
                 err.to_string(),
-            );
-            KernelError::Transport(err)
-        })?;
+            )?;
+            self.transition_plugin_failed(plugin_id)?;
+            return Err(KernelError::Transport(err));
+        }
         self.context
             .transports
             .insert(plugin_id.to_string(), transport);
@@ -181,29 +181,22 @@ impl KernelRuntime {
                 self.context.replay.append_record(&stopping_transition)?;
             }
             Err(denial) => {
-                let evidence = EventEnvelope::new(
-                    self.run_id(),
-                    "policy.runtime.denied",
-                    "station_kernel",
-                    json!({
-                        "plugin_id": plugin_id,
-                        "target_state": "Stopping",
-                        "denial": supervisor_denial_kind(&denial),
-                        "reason": denial.to_string(),
-                    }),
-                );
-                self.context.replay.append_record(&evidence)?;
+                self.record_runtime_denied(
+                    plugin_id,
+                    "Stopping",
+                    supervisor_denial_kind(&denial),
+                    denial.to_string(),
+                )?;
                 return Err(KernelError::Supervisor(denial));
             }
         }
 
         if let Some(mut transport) = self.context.transports.remove(plugin_id) {
             let transport_id = transport.id().to_string();
-            transport.stop().map_err(|err| {
-                let _ =
-                    self.record_transport_failed(plugin_id, "stop", &transport_id, err.to_string());
-                KernelError::Transport(err)
-            })?;
+            if let Err(err) = transport.stop() {
+                self.record_transport_failed(plugin_id, "stop", &transport_id, err.to_string())?;
+                return Err(KernelError::Transport(err));
+            }
         }
 
         let stopped_transition = self
@@ -220,10 +213,30 @@ impl KernelRuntime {
         plugin_id: &str,
         admitted: &AdmittedEvent,
     ) -> Result<(), KernelError> {
+        if !self
+            .context
+            .registry
+            .can_subscribe(plugin_id, admitted.topic())
+        {
+            let reason = format!(
+                "plugin {plugin_id} is not subscribed to topic {}",
+                admitted.topic()
+            );
+            self.record_runtime_denied(
+                plugin_id,
+                "SendToPlugin",
+                "SubscriptionDenied",
+                reason.as_str(),
+            )?;
+            let transport_id = format!("plugin:{plugin_id}");
+            self.record_transport_failed(plugin_id, "send", &transport_id, reason.as_str())?;
+            return Err(KernelError::Transport(TransportError::SendFailed(reason)));
+        }
+
         if !self.context.transports.contains_key(plugin_id) {
             let reason = "transport not active";
             let transport_id = format!("plugin:{plugin_id}");
-            let _ = self.record_transport_failed(plugin_id, "send", &transport_id, reason);
+            self.record_transport_failed(plugin_id, "send", &transport_id, reason)?;
             return Err(KernelError::Transport(TransportError::NotStarted));
         }
         let transport = self
@@ -233,10 +246,12 @@ impl KernelRuntime {
             .expect("transport existence checked");
         let transport_id = transport.id().to_string();
         let event = admitted.to_envelope_with_policy_event_id();
-        transport.send(&event).map_err(|err| {
-            let _ = self.record_transport_failed(plugin_id, "send", &transport_id, err.to_string());
-            KernelError::Transport(err)
-        })
+        if let Err(err) = transport.send(&event) {
+            self.record_transport_failed(plugin_id, "send", &transport_id, err.to_string())?;
+            return Err(KernelError::Transport(err));
+        }
+
+        Ok(())
     }
 
     pub fn seal_run(self, status: RunStatus) -> Result<RunManifest, KernelError> {
@@ -257,6 +272,37 @@ impl KernelRuntime {
 
     pub fn run_id(&self) -> String {
         self.context.supervisor.session.run_id.clone()
+    }
+
+    fn record_runtime_denied(
+        &mut self,
+        plugin_id: &str,
+        target_state: &str,
+        denial: &str,
+        reason: impl Into<String>,
+    ) -> Result<(), KernelError> {
+        let evidence = EventEnvelope::new(
+            self.run_id(),
+            "policy.runtime.denied",
+            "station_kernel",
+            json!({
+                "plugin_id": plugin_id,
+                "target_state": target_state,
+                "denial": denial,
+                "reason": reason.into(),
+            }),
+        );
+        self.context.replay.append_record(&evidence)?;
+        Ok(())
+    }
+
+    fn transition_plugin_failed(&mut self, plugin_id: &str) -> Result<(), KernelError> {
+        let failed_transition = self
+            .context
+            .supervisor
+            .transition(plugin_id, PluginRuntimeState::Failed)?;
+        self.context.replay.append_record(&failed_transition)?;
+        Ok(())
     }
 
     fn record_transport_failed(
@@ -333,6 +379,22 @@ mod tests {
         plugin_id: &str,
         transport: TransportKind,
     ) {
+        register_admitted_plugin_with_topics(
+            runtime,
+            plugin_id,
+            transport,
+            vec![],
+            vec!["quantum.state"],
+        );
+    }
+
+    fn register_admitted_plugin_with_topics(
+        runtime: &mut KernelRuntime,
+        plugin_id: &str,
+        transport: TransportKind,
+        subscribes: Vec<&str>,
+        publishes: Vec<&str>,
+    ) {
         let manifest = PluginManifest {
             id: plugin_id.to_string(),
             kind: PluginKind::Compute,
@@ -341,8 +403,8 @@ mod tests {
             artifact_hash:
                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
                     .to_string(),
-            subscribes: vec![],
-            publishes: vec!["quantum.state".to_string()],
+            subscribes: subscribes.into_iter().map(ToString::to_string).collect(),
+            publishes: publishes.into_iter().map(ToString::to_string).collect(),
             capabilities: vec![],
             capability_claims: vec![],
         };
@@ -574,19 +636,22 @@ mod tests {
     fn cannot_send_to_plugin_before_start() {
         let mut runtime =
             KernelRuntime::from_profile_path(root_profile_path()).expect("runtime should init");
-        runtime
-            .register_plugins()
-            .expect("plugins should register successfully");
-        runtime
-            .register_schemas()
-            .expect("schemas should register successfully");
+        register_admitted_plugin_with_topics(
+            &mut runtime,
+            "test_local_not_started",
+            TransportKind::Local,
+            vec!["quantum.state"],
+            vec!["quantum.state"],
+        );
 
-        let event = quantum_state_event(runtime.run_id());
-        let admitted = runtime
-            .admit(event)
-            .expect("admission should return result")
-            .expect("event should be admitted");
-        let send_result = runtime.send_to_plugin("adapter_quantum", &admitted);
+        let event = EventEnvelope::new(
+            runtime.run_id(),
+            "quantum.state",
+            "adapter_quantum",
+            json!({"phase":"stable"}),
+        );
+        let admitted = AdmittedEvent::new(event, "policy-event-id".to_string());
+        let send_result = runtime.send_to_plugin("test_local_not_started", &admitted);
         assert!(matches!(
             send_result,
             Err(KernelError::Transport(TransportError::NotStarted))
@@ -596,7 +661,7 @@ mod tests {
             .expect("events should be readable");
         assert!(events.iter().any(|event| {
             event.topic == "transport.runtime.failed"
-                && event.payload["plugin_id"] == "adapter_quantum"
+                && event.payload["plugin_id"] == "test_local_not_started"
                 && event.payload["stage"] == "send"
         }));
 
@@ -607,7 +672,13 @@ mod tests {
     fn can_send_to_local_plugin_after_start() {
         let mut runtime =
             KernelRuntime::from_profile_path(root_profile_path()).expect("runtime should init");
-        register_admitted_plugin(&mut runtime, "test_local_send", TransportKind::Local);
+        register_admitted_plugin_with_topics(
+            &mut runtime,
+            "test_local_send",
+            TransportKind::Local,
+            vec!["quantum.state"],
+            vec!["quantum.state"],
+        );
         runtime
             .start_plugin("test_local_send")
             .expect("local plugin should start");
@@ -631,6 +702,146 @@ mod tests {
         }));
 
         let _ = fs::remove_dir_all(runtime.run_dir());
+    }
+
+    #[test]
+    fn send_to_plugin_requires_target_subscription() {
+        let mut runtime =
+            KernelRuntime::from_profile_path(root_profile_path()).expect("runtime should init");
+        register_admitted_plugin_with_topics(
+            &mut runtime,
+            "test_local_unsubscribed",
+            TransportKind::Local,
+            vec![],
+            vec!["quantum.state"],
+        );
+        runtime
+            .start_plugin("test_local_unsubscribed")
+            .expect("local plugin should start");
+
+        let event = EventEnvelope::new(
+            runtime.run_id(),
+            "quantum.state",
+            "adapter_quantum",
+            json!({"phase":"stable"}),
+        );
+        let admitted = AdmittedEvent::new(event, "policy-event-id".to_string());
+        let send_result = runtime.send_to_plugin("test_local_unsubscribed", &admitted);
+        assert!(matches!(
+            send_result,
+            Err(KernelError::Transport(TransportError::SendFailed(_)))
+        ));
+
+        let _ = fs::remove_dir_all(runtime.run_dir());
+    }
+
+    #[test]
+    fn unsubscribed_target_send_records_runtime_denial() {
+        let mut runtime =
+            KernelRuntime::from_profile_path(root_profile_path()).expect("runtime should init");
+        register_admitted_plugin_with_topics(
+            &mut runtime,
+            "test_local_unsubscribed_denial",
+            TransportKind::Local,
+            vec![],
+            vec!["quantum.state"],
+        );
+        runtime
+            .start_plugin("test_local_unsubscribed_denial")
+            .expect("local plugin should start");
+
+        let event = EventEnvelope::new(
+            runtime.run_id(),
+            "quantum.state",
+            "adapter_quantum",
+            json!({"phase":"stable"}),
+        );
+        let admitted = AdmittedEvent::new(event, "policy-event-id".to_string());
+        let _ = runtime.send_to_plugin("test_local_unsubscribed_denial", &admitted);
+
+        let events = JsonlReplayLog::read_all_events(runtime.context.events_path.clone())
+            .expect("events should be readable");
+        assert!(events.iter().any(|event| {
+            event.topic == "policy.runtime.denied"
+                && event.payload["plugin_id"] == "test_local_unsubscribed_denial"
+                && event.payload["target_state"] == "SendToPlugin"
+                && event.payload["denial"] == "SubscriptionDenied"
+        }));
+
+        let _ = fs::remove_dir_all(runtime.run_dir());
+    }
+
+    #[test]
+    fn transport_start_failure_transitions_plugin_to_failed() {
+        let mut runtime =
+            KernelRuntime::from_profile_path(root_profile_path()).expect("runtime should init");
+        register_admitted_plugin(
+            &mut runtime,
+            "test_wasm_failed_transition",
+            TransportKind::Wasm,
+        );
+
+        let result = runtime.start_plugin("test_wasm_failed_transition");
+        assert!(matches!(result, Err(KernelError::Transport(_))));
+
+        let events = JsonlReplayLog::read_all_events(runtime.context.events_path.clone())
+            .expect("events should be readable");
+        let starting_index = events
+            .iter()
+            .position(|event| {
+                event.topic == "supervisor.plugin.transition"
+                    && event.payload["plugin_id"] == "test_wasm_failed_transition"
+                    && event.payload["to"] == "Starting"
+            })
+            .expect("starting transition should be present");
+        let transport_failed_index = events
+            .iter()
+            .position(|event| {
+                event.topic == "transport.runtime.failed"
+                    && event.payload["plugin_id"] == "test_wasm_failed_transition"
+            })
+            .expect("transport failure should be present");
+        let failed_transition_index = events
+            .iter()
+            .position(|event| {
+                event.topic == "supervisor.plugin.transition"
+                    && event.payload["plugin_id"] == "test_wasm_failed_transition"
+                    && event.payload["to"] == "Failed"
+            })
+            .expect("failed transition should be present");
+
+        assert!(starting_index < transport_failed_index);
+        assert!(transport_failed_index < failed_transition_index);
+
+        let _ = fs::remove_dir_all(runtime.run_dir());
+    }
+
+    #[test]
+    fn replay_append_failure_during_transport_failure_is_not_swallowed() {
+        let mut runtime =
+            KernelRuntime::from_profile_path(root_profile_path()).expect("runtime should init");
+        register_admitted_plugin_with_topics(
+            &mut runtime,
+            "test_local_replay_failure",
+            TransportKind::Local,
+            vec!["quantum.state"],
+            vec!["quantum.state"],
+        );
+        runtime
+            .context
+            .replay
+            .debug_set_broken_writer()
+            .expect("configure broken writer");
+
+        let event = EventEnvelope::new(
+            runtime.run_id(),
+            "quantum.state",
+            "adapter_quantum",
+            json!({"phase":"stable"}),
+        );
+        let admitted = AdmittedEvent::new(event, "policy-event-id".to_string());
+        let send_result = runtime.send_to_plugin("test_local_replay_failure", &admitted);
+        assert!(matches!(send_result, Err(KernelError::Replay(_))));
     }
 
     #[test]
