@@ -486,7 +486,7 @@ mod tests {
             .expect("append admitted event");
     }
 
-    #[cfg(feature = "subprocess")]
+    #[cfg(all(feature = "subprocess", unix))]
     fn register_admitted_plugin_manifest(runtime: &mut KernelRuntime, manifest: PluginManifest) {
         runtime
             .context
@@ -515,7 +515,7 @@ mod tests {
             .expect("append admitted event");
     }
 
-    #[cfg(feature = "subprocess")]
+    #[cfg(all(feature = "subprocess", unix))]
     fn drain_plugin_outputs_until_activity(
         runtime: &mut KernelRuntime,
         plugin_id: &str,
