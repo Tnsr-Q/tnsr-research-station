@@ -1,0 +1,11 @@
+{
+  "id": "tnsr.plugin.capability.v1",
+  "topic": "plugin.capability",
+  "version": "1",
+  "required_fields": [
+    ["enabled", "Boolean"],
+    ["deterministic", "Boolean"],
+    ["claims", "Object"],
+    ["supported_topics", "Array"]
+  ]
+}
