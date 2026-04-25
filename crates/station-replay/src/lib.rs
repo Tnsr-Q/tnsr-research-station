@@ -182,7 +182,9 @@ impl JsonlReplayLog {
 
         let close_rc = unsafe { libc::close(pipe_fds[0]) };
         if close_rc != 0 {
-            return Err(ReplayError::Io(std::io::Error::last_os_error()));
+            let err = std::io::Error::last_os_error();
+            let _ = unsafe { libc::close(pipe_fds[1]) };
+            return Err(ReplayError::Io(err));
         }
 
         let write_end = unsafe { File::from_raw_fd(pipe_fds[1]) };
