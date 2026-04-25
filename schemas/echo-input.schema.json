@@ -1,0 +1,8 @@
+{
+  "id": "tnsr.echo.input.v1",
+  "topic": "echo.input",
+  "version": "1",
+  "required_fields": [
+    ["message", "String"]
+  ]
+}

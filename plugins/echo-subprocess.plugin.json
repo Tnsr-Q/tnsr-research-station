@@ -1,0 +1,36 @@
+{
+  "id": "echo_subprocess",
+  "kind": "compute",
+  "transport": "subprocess",
+  "version": "0.1.0",
+  "artifact_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "subscribes": ["echo.input"],
+  "publishes": ["echo.input", "echo.output"],
+  "capabilities": [
+    "echo.roundtrip",
+    "replay.safe"
+  ],
+  "capability_claims": [
+    {
+      "name": "echo.roundtrip",
+      "enabled": true,
+      "required": true,
+      "deterministic": true,
+      "replay_safe": true,
+      "projection_only": false,
+      "emits_artifacts": true,
+      "requires_network": false,
+      "requires_filesystem": false,
+      "requires_gpu": false,
+      "max_runtime_ms": 1000
+    }
+  ],
+  "transport_config": {
+    "command": "python3",
+    "args": ["fixtures/sidecars/echo_jsonl.py"],
+    "working_dir": "..",
+    "env_allowlist": [],
+    "inherit_env": false,
+    "timeout_ms": 500
+  }
+}
