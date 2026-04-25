@@ -6,10 +6,36 @@
   "artifact_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "subscribes": ["quantum.analyze"],
   "publishes": ["quantum.state"],
-  "capabilities": ["collapse_ratio", "euler_characteristic", "galois_order"],
+  "capabilities": [
+    "quantum.state.emit",
+    "simulation.hypergrid",
+    "artifact.write",
+    "replay.safe"
+  ],
   "capability_claims": [
-    { "name": "collapse_ratio", "projection_only": false },
-    { "name": "euler_characteristic", "projection_only": false },
-    { "name": "galois_order", "projection_only": true }
+    {
+      "name": "quantum.state.emit",
+      "enabled": true,
+      "required": true,
+      "deterministic": true,
+      "replay_safe": true,
+      "projection_only": false,
+      "emits_artifacts": true,
+      "requires_network": false,
+      "requires_filesystem": false,
+      "requires_gpu": false,
+      "max_runtime_ms": 1000
+    },
+    {
+      "name": "simulation.hypergrid",
+      "enabled": true,
+      "deterministic": true,
+      "replay_safe": true,
+      "projection_only": false,
+      "emits_artifacts": false,
+      "requires_network": false,
+      "requires_filesystem": false,
+      "requires_gpu": true
+    }
   ]
 }

@@ -1,7 +1,7 @@
+use super::error::RunError;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
-use super::error::RunError;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -14,7 +14,26 @@ pub enum RunStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CapabilityClaimSummary {
     pub name: String,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
+    pub deterministic: bool,
+    #[serde(default)]
+    pub replay_safe: bool,
+    #[serde(default)]
     pub projection_only: bool,
+    #[serde(default)]
+    pub emits_artifacts: bool,
+    #[serde(default)]
+    pub requires_network: bool,
+    #[serde(default)]
+    pub requires_filesystem: bool,
+    #[serde(default)]
+    pub requires_gpu: bool,
+    #[serde(default)]
+    pub max_runtime_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,10 +93,7 @@ pub struct RunManifest {
     pub artifacts: Vec<ArtifactSummary>,
 }
 
-pub fn write_manifest_json(
-    manifest: &RunManifest,
-    path: impl AsRef<Path>,
-) -> Result<(), RunError> {
+pub fn write_manifest_json(manifest: &RunManifest, path: impl AsRef<Path>) -> Result<(), RunError> {
     if let Some(parent) = path.as_ref().parent() {
         fs::create_dir_all(parent)?;
     }
@@ -86,9 +102,7 @@ pub fn write_manifest_json(
     Ok(())
 }
 
-pub fn load_manifest_json(
-    path: impl AsRef<Path>,
-) -> Result<RunManifest, RunError> {
+pub fn load_manifest_json(path: impl AsRef<Path>) -> Result<RunManifest, RunError> {
     let data = fs::read_to_string(path)?;
     let manifest = serde_json::from_str(&data)?;
     Ok(manifest)

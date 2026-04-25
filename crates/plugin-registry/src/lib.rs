@@ -59,11 +59,29 @@ impl TransportKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CapabilityClaim {
     pub name: String,
     #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
+    pub deterministic: bool,
+    #[serde(default)]
+    pub replay_safe: bool,
+    #[serde(default)]
     pub projection_only: bool,
+    #[serde(default)]
+    pub emits_artifacts: bool,
+    #[serde(default)]
+    pub requires_network: bool,
+    #[serde(default)]
+    pub requires_filesystem: bool,
+    #[serde(default)]
+    pub requires_gpu: bool,
+    #[serde(default)]
+    pub max_runtime_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -279,7 +297,7 @@ mod tests {
             capabilities: vec!["test_capability".to_string()],
             capability_claims: vec![CapabilityClaim {
                 name: "test_claim".to_string(),
-                projection_only: false,
+                ..Default::default()
             }],
         };
 
@@ -314,11 +332,20 @@ mod tests {
             capability_claims: vec![
                 CapabilityClaim {
                     name: "claim_a".to_string(),
-                    projection_only: false,
+                    enabled: true,
+                    required: true,
+                    deterministic: true,
+                    replay_safe: true,
+                    emits_artifacts: true,
+                    requires_gpu: false,
+                    max_runtime_ms: Some(1_000),
+                    ..Default::default()
                 },
                 CapabilityClaim {
                     name: "claim_b".to_string(),
                     projection_only: true,
+                    requires_network: true,
+                    ..Default::default()
                 },
             ],
         };
@@ -332,9 +359,16 @@ mod tests {
         assert_eq!(loaded.capabilities, vec!["simple_cap"]);
         assert_eq!(loaded.capability_claims.len(), 2);
         assert_eq!(loaded.capability_claims[0].name, "claim_a");
+        assert!(loaded.capability_claims[0].enabled);
+        assert!(loaded.capability_claims[0].required);
+        assert!(loaded.capability_claims[0].deterministic);
+        assert!(loaded.capability_claims[0].replay_safe);
         assert!(!loaded.capability_claims[0].projection_only);
+        assert!(loaded.capability_claims[0].emits_artifacts);
+        assert_eq!(loaded.capability_claims[0].max_runtime_ms, Some(1_000));
         assert_eq!(loaded.capability_claims[1].name, "claim_b");
         assert!(loaded.capability_claims[1].projection_only);
+        assert!(loaded.capability_claims[1].requires_network);
 
         let _ = std::fs::remove_file(path);
     }
@@ -356,11 +390,12 @@ mod tests {
             capability_claims: vec![
                 CapabilityClaim {
                     name: "duplicate_name".to_string(),
-                    projection_only: false,
+                    ..Default::default()
                 },
                 CapabilityClaim {
                     name: "duplicate_name".to_string(),
                     projection_only: true,
+                    ..Default::default()
                 },
             ],
         };
@@ -387,14 +422,18 @@ mod tests {
             capabilities: vec![],
             capability_claims: vec![CapabilityClaim {
                 name: "  ".to_string(),
-                projection_only: false,
+                ..Default::default()
             }],
         };
 
         let result = registry.register(manifest);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.contains("capability claim name cannot be empty"), "{}", err);
+        assert!(
+            err.contains("capability claim name cannot be empty"),
+            "{}",
+            err
+        );
     }
 
     #[test]
@@ -402,10 +441,15 @@ mod tests {
         let claim = CapabilityClaim {
             name: "projection_view".to_string(),
             projection_only: true,
+            enabled: true,
+            replay_safe: true,
+            ..Default::default()
         };
         let json = serde_json::to_string(&claim).unwrap();
         let loaded: CapabilityClaim = serde_json::from_str(&json).unwrap();
         assert_eq!(loaded.name, "projection_view");
         assert!(loaded.projection_only);
+        assert!(loaded.enabled);
+        assert!(loaded.replay_safe);
     }
 }
