@@ -36,6 +36,7 @@ pub struct PluginSummary {
     pub publishes: Vec<String>,
     pub subscribes: Vec<String>,
     pub capabilities: Vec<String>,
+    #[serde(default)]
     pub capability_claims: Vec<CapabilityClaimSummary>,
 }
 
