@@ -4,8 +4,9 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::os::fd::FromRawFd;
 use std::path::{Path, PathBuf};
+#[cfg(all(unix, feature = "debug-hooks"))]
+use std::os::fd::FromRawFd;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReplayError {
@@ -173,6 +174,7 @@ impl JsonlReplayLog {
         &self.path
     }
 
+    #[cfg(all(unix, feature = "debug-hooks"))]
     pub fn debug_set_broken_writer(&mut self) -> Result<(), ReplayError> {
         let mut pipe_fds = [0; 2];
         let rc = unsafe { libc::pipe(pipe_fds.as_mut_ptr()) };

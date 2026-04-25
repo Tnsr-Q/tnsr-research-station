@@ -21,3 +21,6 @@ station_transport = { path = "../station-transport" }
 serde_json = "1"
 tracing = "0.1"
 thiserror = "1"
+
+[dev-dependencies]
+station_replay = { path = "../station-replay", features = ["debug-hooks"] }

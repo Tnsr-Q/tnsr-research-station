@@ -4,13 +4,17 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+debug-hooks = ["dep:libc"]
+
 [dependencies]
 runtime_core = { path = "../runtime-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 thiserror = "1"
+libc = { version = "0.2", optional = true }
 
 [dev-dependencies]
-libc = "0.2"
 ulid = "1"
