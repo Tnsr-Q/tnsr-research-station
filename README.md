@@ -1,436 +1,574 @@
 # tnsr-research-station
 
-Rust-first research-station kernel where Rust is the canonical control-plane spine for event contracts, plugin admission, schema authority, artifact provenance, lifecycle supervision, replay verification, and projection bridges.
+Rust-first research-station kernel for replayable scientific runtimes.
 
-The goal is not to build a monolithic research app. The goal is to build a small, typed, replayable runtime backbone that can safely coordinate future quantum, PPF, ONNX, RAG, RL, swarm, browser, GPUI, JAX, Julia, WASM, subprocess, and agent sidecars through explicit plugin and event contracts.
+`tnsr-research-station` is a typed Rust control plane for coordinating research adapters, sidecars, projections, schemas, artifacts, replay logs, and run manifests. The kernel is intentionally small: it does not try to become a monolithic research application. It provides the canonical runtime boundary that future quantum, RAG, RL, JAX, WASM, subprocess, browser, GPUI, and agent systems must pass through.
 
-## Project Structure
+The central invariant is simple:
 
-```
+> No plugin-originating event becomes authoritative until it is admitted by policy, recorded into replay, and included in run closure.
+
+---
+
+## Current status
+
+The current main branch supports:
+
+- declarative run profiles
+- plugin manifests with structured capability claims
+- profile-level runtime permissions
+- topic schemas and schema-hash attachment
+- policy-admitted event publication
+- replayable policy denials
+- replayable supervisor lifecycle transitions
+- content-addressed artifact provenance
+- hash-chained JSONL replay logs
+- sealed run manifests
+- projection-only browser and GPUI bridges
+- owned runtime transports
+- local and null transports by default
+- feature-gated subprocess sidecars
+- subprocess stdin/stdout JSONL protocol
+- subprocess stderr/evidence capture
+- subprocess timeout/kill evidence
+- subprocess output candidate admission through `PolicyEngine`
+- bounded subprocess `working_dir` resolution
+- default-deny subprocess environment inheritance
+
+Subprocess execution is available only when explicitly enabled with the `subprocess` feature. Other remote transports are represented in the type system but remain disabled until their admission, replay, and security contracts are implemented.
+
+---
+
+## Repository layout
+
+```text
 tnsr-research-station/
-├── Cargo.toml                      # Workspace manifest
-├── Cargo.lock                      # Dependency lock file
-├── README.md                       # This file
-├── .gitignore
-├── crates/                         # All Rust crates
-│   ├── runtime-core/               # Core event runtime (EventEnvelope, EventBus, SessionState)
-│   ├── plugin-registry/            # Plugin identity and authorization
-│   ├── station-supervisor/         # Plugin lifecycle state machine
-│   ├── station-schema/             # Topic-level payload contracts
-│   ├── station-policy/             # Event admission gate
-│   ├── artifact-ledger/            # Content-addressed artifact provenance
-│   ├── station-replay/             # Tamper-evident event history (JSONL + hash chain)
-│   ├── station-run/                # Run closure artifacts and manifests
-│   ├── station-telemetry/          # Tracing/logging setup
-│   ├── station-transport/          # Transport trait and implementations
-│   ├── bridge-browser/             # Browser projection bridge
-│   ├── bridge-gpui/                # Native shell projection bridge
-│   ├── adapter-quantum/            # Quantum compute adapter
-│   ├── adapter-rag/                # RAG/semantic adapter
-│   └── station-kernel/             # Executable proof-of-life runtime
-├── plugins/                        # Plugin manifest files
+├── Cargo.toml
+├── Cargo.lock
+├── README.md
+├── crates/
+│   ├── runtime-core/          # EventEnvelope, EventBus, session identity, event lineage
+│   ├── plugin-registry/       # Plugin manifests, topic auth, capability claims, transport config
+│   ├── station-supervisor/    # Plugin lifecycle state machine and permission-gated startup
+│   ├── station-schema/        # Topic payload schemas and schema-hash validation
+│   ├── station-policy/        # Event admission gate
+│   ├── artifact-ledger/       # SHA256 artifact provenance records
+│   ├── station-replay/        # Hash-chained JSONL replay log
+│   ├── station-run/           # RunProfile and RunManifest models
+│   ├── station-transport/     # Transport trait, local/null, feature-gated subprocess
+│   ├── station-telemetry/     # Tracing setup
+│   ├── bridge-browser/        # Browser-safe projection frames
+│   ├── bridge-gpui/           # Native/terminal projection formatting
+│   ├── adapter-quantum/       # Proof adapter emitting quantum.state
+│   ├── adapter-rag/           # Reserved semantic/RAG adapter surface
+│   └── station-kernel/        # Runtime API and executable proof path
+├── plugins/
 │   ├── quantum-hybrid.plugin.json
 │   └── rag.plugin.json
-├── profiles/                       # Run profile configurations
+├── profiles/
 │   └── default.profile.json
-├── schemas/                        # Payload schema definitions
+├── schemas/
 │   ├── quantum-state.schema.json
 │   ├── rag-result.schema.json
 │   └── plugin-capability.schema.json
-├── proto/                          # Protocol buffer definitions
+├── proto/
 │   └── tnsr_event_v1.proto
-└── runs/                           # Run output directories
-    └── run-<ulid>/
-        ├── events.jsonl            # Append-only event log
-        └── manifest.json           # Run closure summary
+└── runs/
+    └── <run_id>/
+        ├── events.jsonl
+        └── manifest.json
 ```
 
-## Current kernel model
+---
 
-The current proof path is:
+## Quick start
 
-```text
-PluginManifest
-  -> PluginRegistry registration
-  -> StationSupervisor runtime registration/admission
-  -> PayloadSchema registration
-  -> adapter emits EventEnvelope
-  -> PolicyEngine admits event
-  -> ArtifactLedger records payload provenance
-  -> EventBus publishes event
-  -> JsonlReplayLog seals event into hash chain
-  -> browser / GPUI bridges render projections
-  -> station_run writes run manifest
+### Run the default kernel proof path
+
+```bash
+cargo run -p station_kernel
 ```
 
-A successful kernel run creates a closed run folder:
+The kernel uses `profiles/default.profile.json` unless `TNSR_PROFILE` is set:
+
+```bash
+TNSR_PROFILE=profiles/default.profile.json cargo run -p station_kernel
+```
+
+A successful run creates:
 
 ```text
 runs/<run_id>/
-  events.jsonl
-  manifest.json
+├── events.jsonl
+└── manifest.json
 ```
 
-`events.jsonl` is the append-only replay log.
-`manifest.json` is the run closure artifact summarizing replay verification, plugins, schemas, and artifacts.
+### Run checks
 
-## Features and Components
+```bash
+cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
 
-### Core Runtime
+### Run subprocess-enabled tests
 
-#### runtime-core
-**Canonical runtime substrate** for the event-driven architecture.
+```bash
+cargo test -p station_transport --features subprocess
+cargo test -p station_kernel --features subprocess
+```
 
-**Features:**
-- `EventEnvelope` contract version: `tnsr.event.v1`
-- `SessionState` with generated run/session identity (ULID-based)
-- `EventBus` for in-process event publication
-- `PublishReport` for tracking event delivery
-- Event lineage helper: `EventEnvelope::child_of` for trace preservation
-- Payloads use `serde_json::Value` for schema flexibility
-
-**Design principle:** runtime-core stays minimal and should not own plugin logic, schema logic, replay persistence, or policy admission.
+The default build does not enable subprocess execution.
 
 ---
 
-### Plugin System
+## Runtime model
 
-#### plugin-registry
-**Typed plugin identity and authorization** layer.
+The kernel proof path is:
 
-**Features:**
-- `PluginManifest` - declarative plugin contracts
-- `PluginKind` - plugin type classification (compute, semantic, bridge, etc.)
-- `TransportKind` - transport layer identification
-- SHA256 artifact hash validation for plugin provenance
-- Duplicate publish/subscribe topic rejection
-- Per-plugin publish/subscribe authorization
-- Registry introspection for manifest generation
-- `CapabilityClaim` - structured capability claims (`enabled`, `required`, `deterministic`, `replay_safe`, `projection_only`, `emits_artifacts`, resource requirements, and optional max runtime)
-- Duplicate capability claim name rejection
-- Empty capability name rejection
+```text
+RunProfile
+  -> PluginManifest files
+  -> PayloadSchema files
+  -> PluginRegistry
+  -> StationSupervisor
+  -> PolicyEngine
+  -> EventBus
+  -> JsonlReplayLog
+  -> ArtifactLedger
+  -> RunManifest
+```
 
-**Design principle:** Plugin manifests are runtime claims, not arbitrary strings.
+For plugin-originating events:
 
-#### station-supervisor
-**Runtime lifecycle state machine** for registered plugins.
+```text
+EventEnvelope
+  -> policy admission
+  -> schema hash attachment
+  -> payload validation
+  -> artifact hashing
+  -> event publication
+  -> replay append
+  -> run manifest closure
+```
 
-**States:**
-- `Registered` - Plugin manifest accepted
-- `Admitted` - Plugin passed admission checks
-- `Starting` - Plugin initialization in progress
-- `Running` - Plugin actively processing
-- `Stopping` - Plugin shutdown in progress
-- `Stopped` - Plugin cleanly terminated
-- `Failed` - Plugin encountered error
-- `Quarantined` - Plugin isolated due to policy violation
+For subprocess sidecars:
 
-**Features:**
-- Emits lifecycle events for observability
-- Tracks whether a plugin is in a publishable runtime state
-- State transitions are enforced and replayable
+```text
+admitted input event
+  -> send_to_plugin(plugin_id, AdmittedEvent)
+  -> subprocess stdin JSONL
+  -> subprocess stdout candidate EventEnvelope
+  -> drain_plugin_outputs(plugin_id)
+  -> PolicyEngine admission
+  -> AdmittedEvent returned only if allowed
+  -> publish_admitted(...)
+  -> replay + artifact + manifest closure
+```
 
----
-
-### Schema and Policy
-
-#### station-schema
-**Topic-level payload contracts** and validation.
-
-**Features:**
-- `PayloadSchema` - declarative field requirements
-- `SchemaRegistry` - centralized schema management
-- Supported primitive/container field types: `Integer`, `Number`, `String`, `Boolean`, `Object`, `Array`
-- Schema hash generation (SHA256)
-- Automatic schema hash attachment to events
-- Required-field validation
-- Schema introspection for manifest generation
-
-**Design principle:** The schema layer is intentionally small. Full JSON Schema support should wait until the native contract layer becomes limiting.
-
-#### station-policy
-**Central event admission gate** - the security boundary.
-
-**Admission checks:**
-1. Source plugin exists in registry
-2. Source plugin may publish the event topic
-3. Source plugin is in an admitted/running state
-4. Topic schema exists in registry
-5. Schema hash is attached (auto-attached if missing)
-6. Payload validates against registered topic schema
-
-**Future work:** Expected runtime denials should become replayable policy events rather than kernel panics.
+Stderr, parse failures, timeouts, non-zero exits, forced kills, and runtime denials are emitted as replayable evidence events.
 
 ---
 
-### Provenance and Replay
+## Core crates
 
-#### artifact-ledger
-**Content-addressed artifact provenance** tracking.
+### `runtime-core`
 
-**Features:**
-- SHA256 content hashes for all artifacts
-- `ArtifactRecord` - immutable artifact metadata
-- `ArtifactRecordRequest` - artifact registration API
-- Content type metadata (MIME types)
-- Trace linkage (parent/child relationships)
-- Parent hash linkage for dependency tracking
-- Schema hash linkage for contract verification
-- Artifact introspection for run manifests
+Canonical runtime substrate.
 
-**Current limitation:** Ledger is in-memory. Future work will persist artifact records and verify stored bytes.
+Provides:
 
-#### station-replay
-**Tamper-evident event history** using hash chains.
+- `EventEnvelope`
+- event IDs and trace IDs
+- parent/child lineage through `EventEnvelope::child_of`
+- `EventBus`
+- `PublishReport`
+- session identity
+- payloads as `serde_json::Value`
 
-**Features:**
-- JSONL replay log (append-only)
-- Hash-chained `ReplayRecord` structures
-- Canonical JSON event hashing (deterministic)
-- Contiguous index verification
-- Previous-record hash verification
-- Event hash verification
-- Final record hash reporting
-
-**Design principle:** Replay is the canonical record of what happened. All runtime decisions must be replayable.
+`runtime-core` intentionally does not own plugin registration, policy, schema validation, replay persistence, or artifact provenance.
 
 ---
 
-### Transport Layer
+### `plugin-registry`
 
-#### station-transport
-**Transport trait and implementations** for plugin communication.
+Plugin identity and authorization layer.
 
-**Transport Trait:**
+A `PluginManifest` defines:
+
+- `id`
+- `kind`
+- `transport`
+- `version`
+- `artifact_hash`
+- `subscribes`
+- `publishes`
+- `capabilities`
+- `capability_claims`
+- `transport_config`
+
+The registry enforces:
+
+- non-empty plugin IDs
+- duplicate plugin rejection
+- duplicate publish-topic rejection
+- duplicate subscribe-topic rejection
+- SHA256 artifact-hash shape
+- non-empty capability claim names
+- duplicate capability claim rejection
+- per-plugin publish authorization
+- per-plugin subscribe authorization
+
+#### Capability claims
+
+Capability claims give the supervisor and manifest concrete runtime metadata:
+
+```json
+{
+  "name": "quantum.state.emit",
+  "enabled": true,
+  "required": true,
+  "deterministic": true,
+  "replay_safe": true,
+  "projection_only": false,
+  "emits_artifacts": true,
+  "requires_network": false,
+  "requires_filesystem": false,
+  "requires_gpu": false,
+  "max_runtime_ms": 1000
+}
+```
+
+#### Transport config
+
+Subprocess-capable plugin manifests may include:
+
+```json
+{
+  "transport_config": {
+    "command": "python3",
+    "args": ["fixtures/sidecars/echo_jsonl.py"],
+    "working_dir": ".",
+    "env_allowlist": [],
+    "inherit_env": false,
+    "timeout_ms": 1000
+  }
+}
+```
+
+`inherit_env` defaults to `false`.
+
+---
+
+### `station-run`
+
+Run profiles and run manifests.
+
+`RunProfile` controls:
+
+- profile name
+- description
+- plugin manifest paths
+- schema file paths
+- runtime permissions
+
+The default profile is conservative:
+
+```json
+{
+  "allow_network": false,
+  "allow_filesystem": false,
+  "allow_gpu": false,
+  "allow_projection_only": true,
+  "allow_nondeterministic": false
+}
+```
+
+`RunManifest` records:
+
+- run ID
+- profile name
+- status
+- failure reason, if any
+- event log path
+- manifest path
+- start/completion timestamps
+- replay validity
+- final replay hash
+- plugin summaries
+- capability claim summaries
+- schema summaries
+- artifact summaries
+
+Manifest paths are relative so a run folder can be moved as a sealed artifact.
+
+---
+
+### `station-supervisor`
+
+Plugin lifecycle state machine.
+
+States:
+
+```text
+Registered
+Admitted
+Starting
+Running
+Stopping
+Stopped
+Failed
+Quarantined
+```
+
+The supervisor records lifecycle transitions as replayable events and enforces profile permissions during startup/running transitions. Runtime denials are evidence, not panics.
+
+Examples of denied startup conditions:
+
+- plugin requires network but profile forbids network
+- plugin requires filesystem but profile forbids filesystem
+- plugin requires GPU but profile forbids GPU
+- plugin is projection-only but profile forbids projection-only plugins
+- plugin is nondeterministic but profile forbids nondeterminism
+
+---
+
+### `station-schema`
+
+Topic-level payload validation.
+
+Supported field types:
+
+```text
+Integer
+Number
+String
+Boolean
+Object
+Array
+```
+
+The schema registry:
+
+- registers topic schemas
+- computes schema hashes
+- attaches schema hashes to events
+- validates required fields
+- validates required field types
+- provides schema summaries for run manifests
+
+Every plugin-originating event admitted by policy should have a registered topic schema.
+
+---
+
+### `station-policy`
+
+Central event admission gate.
+
+For plugin-originating events, policy checks:
+
+1. source plugin exists
+2. plugin may publish the event topic
+3. plugin runtime state is publishable
+4. topic schema exists
+5. schema hash is attached
+6. payload validates against schema
+
+Transport-backed plugins must be `Running` before publishing. Local plugins may publish when `Admitted` or `Running`.
+
+Policy emits:
+
+```text
+policy.event.admitted
+policy.event.denied
+```
+
+Denials preserve trace lineage and are appended to replay.
+
+---
+
+### `station-replay`
+
+Tamper-evident JSONL replay log.
+
+Each replay record includes:
+
+- index
+- event
+- event hash
+- previous record hash
+- record hash
+
+Replay verification checks:
+
+- contiguous indices
+- event hash correctness
+- previous-record hash linkage
+- record hash correctness
+
+Replay is the canonical record of runtime decisions.
+
+---
+
+### `artifact-ledger`
+
+Content-addressed artifact provenance.
+
+Artifacts are recorded with:
+
+- artifact ID
+- source
+- SHA256 hash
+- algorithm
+- byte length
+- content type
+- trace ID
+- parent hash
+- schema hash
+
+Current implementation is an in-memory ledger used during run closure. Persistent artifact ledgers are a future hardening step.
+
+---
+
+### `station-transport`
+
+Transport abstraction and implementations.
+
+The transport trait is:
+
 ```rust
 pub trait Transport {
     fn id(&self) -> &str;
     fn start(&mut self) -> Result<(), TransportError>;
     fn stop(&mut self) -> Result<(), TransportError>;
     fn send(&mut self, event: &EventEnvelope) -> Result<(), TransportError>;
+
+    fn drain_candidate_events(&mut self) -> Vec<EventEnvelope> {
+        Vec::new()
+    }
+
+    fn drain_evidence_events(&mut self) -> Vec<EventEnvelope> {
+        Vec::new()
+    }
 }
 ```
 
-**Implemented transport interfaces / stubs:**
+Implemented/default transports:
 
-1. **LocalTransport** - In-memory transport for testing and local execution
-   - Collects events in a vector
-   - No actual transmission
-   - Useful for unit tests and demos
+- `LocalTransport` — in-memory, test/local execution
+- `NullTransport` — no-op, discards sent events
 
-2. **NullTransport** - No-op transport that discards all events
-   - Useful for benchmarking
-   - Testing scenarios where delivery is not needed
+Feature-gated transport:
 
-3. **SubprocessTransport** - Stateful skeleton for subprocess transport
-   - Command/config state is captured
-   - Real process spawn/send wiring is not integrated yet
+- `SubprocessTransport` — external process sidecar, JSONL stdin/stdout protocol
 
-4. **WebSocketTransport** - Stateful skeleton for WebSocket transport
-   - Endpoint/config state is captured
-   - Real socket connect/send wiring is not integrated yet
+Reserved/disabled transport kinds:
 
-5. **GrpcTransport** - Stateful skeleton for gRPC transport
-   - Service/config state is captured
-   - Real RPC connect/send wiring is not integrated yet
+- `wasm`
+- `websocket`
+- `grpc`
+- `connectrpc`
+- `pyro5`
+- `ffi`
 
-6. **ConnectRpcTransport** - Stateful skeleton for Connect RPC transport
-   - Service/config state is captured
-   - Real connect/send wiring is not integrated yet
+#### Subprocess behavior
 
-7. **Pyro5Transport** - Stateful skeleton for Pyro5 transport
-   - Target/config state is captured
-   - Real remote object connection/send wiring is not integrated yet
+With `--features subprocess`, subprocess transport:
 
-8. **FfiTransport** - Stateful skeleton for FFI transport
-   - Library/config state is captured
-   - Real FFI invocation wiring is not integrated yet
-
-**Status:** Skeleton implementations are present. Transport startup/routing is not yet integrated into `station-kernel`.
-
----
-
-### Run Management
-
-#### station-run
-**Run closure artifacts** and manifest generation.
-
-**Features:**
-- `RunManifest` - comprehensive run summary
-- `RunStatus` - run lifecycle state (active, completed, failed)
-- `PluginSummary` - plugin participation records (includes `capability_claims`)
-- `CapabilityClaimSummary` - structured capability claim records in run manifests
-- `SchemaSummary` - schema usage records
-- `ArtifactSummary` - artifact generation records
-- JSON manifest write/load helpers
-- Snake-case status serialization
-- Manifest round-trip tests
-
-**A run manifest records:**
-- Run ID (ULID)
-- Profile name
-- Status
-- Relative event log path (`events.jsonl`)
-- Relative manifest path (`manifest.json`)
-- Start/completion timestamps
-- Replay verification result
-- Final replay hash
-- Plugin summaries
-- Schema summaries
-- Artifact summaries
-
-**Design principle:** Manifests store relative paths so run folders are portable sealed artifacts.
+- spawns configured command
+- writes admitted input events to stdin as JSONL
+- reads stdout/stderr on background line readers
+- parses stdout lines as candidate `EventEnvelope`s
+- buffers candidate events until kernel drains and admits them
+- converts stderr lines into replayable evidence
+- emits parse-failure evidence for invalid stdout JSON
+- records non-zero child exits
+- closes stdin on stop
+- waits cooperatively
+- kills and reaps child on timeout
+- records timeout and killed evidence
+- defaults to an empty environment
+- supports explicit `inherit_env`
+- supports explicit `env_allowlist`
+- supports bounded `working_dir`
 
 ---
 
-### Projection Bridges
+### `station-kernel`
 
-#### bridge-browser
-**Browser projection bridge** for web visualization.
+Public runtime API and executable proof path.
 
-**Features:**
-- Serializes canonical `EventEnvelope` values into browser-safe JSON frames
-- Non-authoritative projections (read-only views)
-- Suitable for web dashboards and monitoring
+Public API:
 
-**Design principle:** Browser frames are projections only. They are not authoritative state.
+```rust
+pub use admission::AdmittedEvent;
+pub use errors::KernelError;
+pub use runtime::KernelRuntime;
+```
 
-#### bridge-gpui
-**Native shell projection bridge** for terminal output.
+Internal modules such as admission, context, closure, and runtime internals are private. External crates interact with `KernelRuntime`, not with raw context internals.
 
-**Features:**
-- Formats canonical event envelopes into GPUI-style overlay lines
-- Terminal-friendly output
-- Real-time event stream visualization
+Key methods:
 
-**Design principle:** GPUI output is a projection only. It should not become the control-plane source of truth.
+```rust
+KernelRuntime::from_profile_path(...)
+KernelRuntime::register_plugins()
+KernelRuntime::register_schemas()
+KernelRuntime::admit(event)
+KernelRuntime::publish_admitted(admitted)
+KernelRuntime::start_plugin(plugin_id)
+KernelRuntime::send_to_plugin(plugin_id, &admitted)
+KernelRuntime::drain_plugin_outputs(plugin_id)
+KernelRuntime::stop_plugin(plugin_id)
+KernelRuntime::seal_run(status)
+KernelRuntime::seal_run_with_reason(status, reason)
+```
+
+The type boundary prevents raw plugin events from being published unless they have passed policy and become an `AdmittedEvent`.
+
+---
+
+### Projection bridges
+
+#### `bridge-browser`
+
+Serializes canonical events into browser-safe JSON frames.
+
+Browser output is a projection only. It is not authoritative state.
+
+#### `bridge-gpui`
+
+Formats canonical events for native/terminal projection surfaces.
+
+GPUI output is also projection-only.
 
 ---
 
 ### Adapters
 
-#### adapter-quantum
-**Quantum compute adapter** (proof-of-concept).
+#### `adapter-quantum`
 
-**Features:**
-- Emits schema-validated `quantum.state` events
-- Produces payload fields:
-  - `state_dim` - state space dimensionality
-  - `collapse_ratio` - quantum collapse metric
-  - `euler_characteristic` - topological invariant
+Proof adapter that emits `quantum.state` events.
 
-**Purpose:** Demonstrates compute adapter pattern for the kernel proof path.
+Current payload shape includes:
 
-#### adapter-rag
-**RAG/semantic adapter** (reserved for future expansion).
+- `state_dim`
+- `collapse_ratio`
+- `euler_characteristic`
 
-**Intended topics:**
-- `rag.query` - semantic search queries
-- `rag.result` - search results with embeddings
-- Verifier critique events
-- Memory lookup metadata
+#### `adapter-rag`
+
+Semantic/RAG adapter surface reserved for future runtime expansion.
+
+Current manifest declares `rag.result` publication and `quantum.state` subscription, but default runtime permissions deny network access. Starting a network-requiring RAG path should produce replayable denial evidence unless the profile explicitly allows network.
 
 ---
 
-### Observability
+## Event model
 
-#### station-telemetry
-**Tracing and logging setup** for observability.
+Every runtime event is an `EventEnvelope`.
 
-**Features:**
-- JSON tracing initialization
-- Idempotent `try_init` behavior
-- Structured logging compatible with log aggregation systems
-
----
-
-### Runtime Kernel
-
-#### station-kernel
-**Executable proof-of-life** for the Rust backbone.
-
-Current kernel behavior:
-- Initializes telemetry.
-- Creates a supervisor session and run ID.
-- Creates `runs/<run_id>/`.
-- Registers the quantum plugin.
-- Emits supervisor lifecycle events.
-- Opens `events.jsonl`.
-- Registers the `quantum.state` schema.
-- Builds and admits a quantum event through policy.
-- Records payload provenance through ArtifactLedger.
-- Publishes the event on EventBus.
-- Appends the received event to replay.
-- Verifies the replay chain.
-- Writes `manifest.json`.
-- Prints browser and GPUI projections.
-
-Run example:
-
-```bash
-cargo run -p station_kernel
-```
-
-Expected output includes a run folder similar to:
-
-```text
-runs/run-<ulid>/
-  events.jsonl
-  manifest.json
-```
-
-Inspect the generated manifest:
-
-```bash
-cat runs/<run_id>/manifest.json
-```
-
-The manifest should include:
-
-```json
-{
-  "status": "completed",
-  "event_log_path": "events.jsonl",
-  "manifest_path": "manifest.json",
-  "replay_valid": true,
-  "plugins": [
-    {
-      "id": "adapter_quantum",
-      "kind": "compute",
-      "transport": "local"
-    }
-  ],
-  "schemas": [
-    {
-      "id": "tnsr.quantum.state.v1",
-      "topic": "quantum.state"
-    }
-  ],
-  "artifacts": [
-    {
-      "artifact_id": "quantum_state_payload",
-      "source": "adapter_quantum",
-      "algorithm": "sha256"
-    }
-  ]
-}
-```
-
-Exact hashes, timestamps, and run IDs will differ between runs.
-
-Test:
-
-```bash
-cargo test --workspace
-```
-
-## Core invariants
-
-### Event invariants
-
-Every runtime event must be a `runtime_core::EventEnvelope`.
-
-Required conceptual fields:
+Conceptual fields include:
 
 - `version`
 - `event_id`
@@ -445,207 +583,231 @@ Required conceptual fields:
 - `artifact_hash`
 - `schema_hash`
 - `plugin_hash`
+- `policy_event_id`
 
-Derived events should use `EventEnvelope::child_of` so trace lineage is preserved.
+Derived events should use `EventEnvelope::child_of` to preserve trace lineage.
 
-### Policy invariants
+---
 
-No plugin-originating event should be published or replayed without policy admission.
+## Security and replay invariants
 
-Policy currently checks:
+### Plugin events
 
-- plugin exists
-- plugin may publish topic
-- plugin is in allowed runtime state
-- schema exists for topic
-- `schema_hash` is attached
-- payload validates
+Plugin-originating events must not bypass:
 
-Policy denials are emitted as replayable `policy.event.denied` events with trace lineage, ensuring runtime decisions become part of the permanent record.
+- `PluginRegistry`
+- `StationSupervisor`
+- `SchemaRegistry`
+- `PolicyEngine`
+- `JsonlReplayLog`
+- `ArtifactLedger`
+- `RunManifest`
 
-### Replay invariants
+### Admission tokens
 
-Replay records are append-only and hash chained.
+Only the kernel can create or destructure admitted event tokens. External code receives read-only metadata and can pass the token back into kernel APIs.
 
-Each record contains:
+### Runtime denials
 
-- `index`
-- `event`
-- `event_hash`
-- `previous_record_hash`
-- `record_hash`
-
-Replay verification checks:
-
-- contiguous indices
-- event hash correctness
-- previous-record hash linkage
-- record hash correctness
-
-### Schema invariants
-
-Every policy-admitted event topic should have a registered schema.
-
-The current schema layer validates required fields and schema hashes. Field-type validation is the next natural schema hardening step.
-
-**System-event exemption:** System-originating events such as `policy.event.*` and `supervisor.*` are replayable control-plane evidence and do not require plugin policy admission or schema validation. These events are generated by the kernel itself and represent internal runtime decisions rather than plugin-originated data.
-
-### Plugin invariants
-
-Plugins are typed runtime entities.
-
-A plugin manifest defines:
-
-- `id`
-- `kind`
-- `transport`
-- `version`
-- `artifact_hash`
-- `publishes`
-- `subscribes`
-- `capabilities` (simple string list, retained for backwards compatibility)
-- `capability_claims` (structured claims with execution, replay, projection, artifact, and resource requirement metadata)
-
-Plugins may only publish topics declared in their manifests.
-
-### Manifest invariants
-
-A completed run should produce:
+Expected denials do not panic. They become replay evidence:
 
 ```text
-runs/<run_id>/events.jsonl
-runs/<run_id>/manifest.json
+policy.event.denied
+policy.runtime.denied
+transport.runtime.failed
+transport.runtime.timeout
+transport.runtime.killed
+transport.runtime.stderr
+transport.runtime.stdout_parse_failed
 ```
 
-The manifest should summarize:
+### Sidecar outputs
 
-- run identity
-- profile name
-- status
-- event log path
-- replay verification result
-- last replay hash
-- registered plugins
-- registered schemas
-- recorded artifacts
+Subprocess stdout is not trusted. It is only a candidate event stream.
 
-The manifest stores relative paths so the run folder can be moved as a sealed artifact.
-
-## Current Status
-
-### Completed Features ✓
-
-All initially planned PRs have been implemented:
-
-- ✓ **PR 9** — Policy events are now replayable (policy.event.admitted, policy.event.denied)
-- ✓ **PR 10** — EventBus is topic-aware with exact and prefix subscriptions
-- ✓ **PR 11** — Schema field types support Integer, Number, and String validation
-- ✓ **PR 12** — Manifest-backed run loading from declarative files (profiles, plugins, schemas)
-- ✓ **PR 13** — Transport trait skeleton with `LocalTransport` and `NullTransport`
-- ✓ **PR 14** — Six additional transport skeletons:
-  - SubprocessTransport
-  - WebSocketTransport
-  - GrpcTransport
-  - ConnectRpcTransport
-  - Pyro5Transport
-  - FfiTransport
-
-### Current Limitations
-
-- Artifact ledger records are in-memory during runtime
-- No real transport runtime exists yet (skeletons only), and transport startup/routing is not yet integrated into `station-kernel`
-- Browser and GPUI bridges are projection-only
-- station-kernel is still a proof-of-life executable, not a full runtime scheduler
-- System-originating events (policy.*, supervisor.*) bypass schema validation
-
-### Next Development Priorities
-
-**Kernel Consolidation and Hardening** ✓
-
-Goal: Refactor station-kernel for maintainability and add comprehensive integration tests.
-
-Completed:
-- ✓ Extracted duplicated manifest-summary construction into helper functions
-- ✓ Added integration tests for declarative file loading (profiles, plugins, schemas)
-- ✓ Added end-to-end integration tests for kernel run lifecycle
-- ✓ Added integration tests for policy denial flow
-- ✓ Added integration tests for supervisor lifecycle events
-- ✓ Added integration tests for artifact ledger tracking
-
-Remaining considerations:
-- Decide on system-event schema policy (exempt vs. register schemas)
-- Improve schema error types for better diagnostics
-
-**Artifact Persistence**
-
-Goal: Make artifact ledger persistent across runs.
-
-Acceptance criteria:
-- ArtifactLedger can write records to `runs/<run_id>/artifacts.jsonl`
-- Manifest records relative artifact ledger path
-- Artifact records can be reloaded
-- `verify_bytes(hash, data)` exists
-- `records_for_trace(trace_id)` exists
-
-**Transport Integration**
-
-Goal: Connect transport skeletons to station-kernel runtime.
-
-Next steps:
-- Integrate transport startup/routing into kernel
-- Add transport lifecycle management
-- Test subprocess and WebSocket transports with real plugins
-
-## Developer Rules
-
-1. Do not add transport before policy/replay/run closure
-2. Do not publish plugin-originating events without PolicyEngine admission
-3. Do not write raw JSON strings where `serde_json::Value` is expected
-4. Do not manually format browser JSON
-5. Do not use non-cryptographic hashes for provenance
-6. Do not let station-kernel absorb reusable logic
-7. Do not make browser or GPUI projections authoritative
-8. Do not panic on expected runtime denials; emit evidence events
-9. Every new runtime decision should be replayable
-10. Every new crate needs unit tests
-
-## Target Architecture
-
-```
-station-kernel
-  ├── loads RunProfile
-  ├── loads PluginManifest files
-  ├── loads PayloadSchema definitions
-  ├── initializes StationSupervisor
-  ├── initializes PolicyEngine
-  ├── initializes EventBus
-  ├── initializes JsonlReplayLog
-  ├── initializes ArtifactLedger
-  ├── starts admitted transports
-  ├── routes policy-admitted events
-  ├── seals replay records
-  ├── records artifact provenance
-  ├── emits telemetry
-  └── writes RunManifest
+```text
+stdout line
+  -> parse as EventEnvelope
+  -> candidate buffer
+  -> kernel drain
+  -> PolicyEngine
+  -> AdmittedEvent or denial evidence
 ```
 
-### Future Sidecar Integration
+### Projections
 
-Future sidecars may attach through:
-- `local` - in-process
-- `wasm` - WebAssembly modules
-- `subprocess` - external processes
-- `websocket` - WebSocket connections
-- `grpc` - gRPC services
-- `connectrpc` - Connect RPC services
-- `pyro5` - Python remote objects
-- `ffi` - Foreign function interface
+Browser and GPUI projections are read-only views. They are not authoritative control-plane inputs.
 
-**Security boundary:** All sidecars must never bypass:
-- PluginRegistry
-- StationSupervisor
-- SchemaRegistry
-- PolicyEngine
-- JsonlReplayLog
-- ArtifactLedger
-- RunManifest
+---
+
+## Default profile
+
+The default profile loads:
+
+```json
+{
+  "plugin_manifests": [
+    "plugins/quantum-hybrid.plugin.json",
+    "plugins/rag.plugin.json"
+  ],
+  "schema_files": [
+    "schemas/quantum-state.schema.json",
+    "schemas/rag-result.schema.json",
+    "schemas/plugin-capability.schema.json"
+  ]
+}
+```
+
+Default permissions are conservative:
+
+```json
+{
+  "allow_network": false,
+  "allow_filesystem": false,
+  "allow_gpu": false,
+  "allow_projection_only": true,
+  "allow_nondeterministic": false
+}
+```
+
+---
+
+## Working with subprocess sidecars
+
+Subprocess sidecars are disabled in the default feature set.
+
+Enable tests with:
+
+```bash
+cargo test -p station_transport --features subprocess
+cargo test -p station_kernel --features subprocess
+```
+
+A subprocess plugin manifest must provide a command when the subprocess feature is enabled:
+
+```json
+{
+  "id": "adapter_echo",
+  "kind": "compute",
+  "transport": "subprocess",
+  "version": "0.1.0",
+  "artifact_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "subscribes": ["echo.input"],
+  "publishes": ["echo.output"],
+  "capabilities": ["echo.emit", "replay.safe"],
+  "capability_claims": [
+    {
+      "name": "echo.emit",
+      "enabled": true,
+      "required": true,
+      "deterministic": true,
+      "replay_safe": true,
+      "requires_network": false,
+      "requires_filesystem": false,
+      "requires_gpu": false
+    }
+  ],
+  "transport_config": {
+    "command": "python3",
+    "args": ["fixtures/sidecars/echo_jsonl.py"],
+    "working_dir": ".",
+    "env_allowlist": [],
+    "inherit_env": false,
+    "timeout_ms": 1000
+  }
+}
+```
+
+Expected sidecar protocol:
+
+- stdin: JSONL `EventEnvelope` values from kernel to sidecar
+- stdout: JSONL candidate `EventEnvelope` values from sidecar to kernel
+- stderr: diagnostic lines captured as replay evidence
+
+The sidecar should not assume its stdout event will be accepted. The kernel admits or denies it.
+
+---
+
+## Development rules
+
+1. Do not add transport before policy/replay/run closure.
+2. Do not publish plugin-originating events without `PolicyEngine` admission.
+3. Do not write raw JSON strings where `serde_json::Value` is expected.
+4. Do not manually format browser JSON.
+5. Do not use non-cryptographic hashes for provenance.
+6. Do not let `station-kernel` absorb reusable logic.
+7. Do not make browser or GPUI projections authoritative.
+8. Do not panic on expected runtime denials; emit evidence events.
+9. Every new runtime decision should be replayable.
+10. Every new crate needs unit tests.
+11. Every new transport path must have feature gating, tests, denial evidence, and replay closure.
+
+---
+
+## Test matrix
+
+Recommended before merging runtime changes:
+
+```bash
+cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+Recommended before merging subprocess changes:
+
+```bash
+cargo test -p station_transport --features subprocess
+cargo test -p station_kernel --features subprocess
+```
+
+Recommended sanity run:
+
+```bash
+cargo run -p station_kernel
+```
+
+---
+
+## Roadmap
+
+### Next: deterministic subprocess sidecar fixture
+
+Add a small fixture sidecar and end-to-end test:
+
+```text
+fixtures/sidecars/echo_jsonl.py
+plugins/echo-subprocess.plugin.json
+schemas/echo-input.schema.json
+schemas/echo-output.schema.json
+profiles/echo-subprocess.profile.json
+```
+
+Acceptance target:
+
+```text
+kernel starts subprocess from manifest
+kernel sends admitted input event
+sidecar emits candidate output event
+kernel policy-admits candidate
+kernel publishes admitted output
+replay verifies
+manifest seals
+```
+
+### After that
+
+- persistent artifact ledger on disk
+- first real scientific subprocess adapter
+- explicit executable allowlist or signed sidecar manifest
+- stronger system-event schema policy
+- real WebSocket transport behind feature flag
+- real gRPC/ConnectRPC transport behind feature flag
+- WASM sidecar sandbox
+- projection dashboards backed only by replay/projection frames
+
+---
+
+## License
+
+MIT
