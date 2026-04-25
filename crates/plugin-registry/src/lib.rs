@@ -60,6 +60,31 @@ impl TransportKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CapabilityClaim {
+    pub name: String,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
+    pub deterministic: bool,
+    #[serde(default)]
+    pub replay_safe: bool,
+    #[serde(default)]
+    pub projection_only: bool,
+    #[serde(default)]
+    pub emits_artifacts: bool,
+    #[serde(default)]
+    pub requires_network: bool,
+    #[serde(default)]
+    pub requires_filesystem: bool,
+    #[serde(default)]
+    pub requires_gpu: bool,
+    #[serde(default)]
+    pub max_runtime_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginManifest {
     pub id: String,
     pub kind: PluginKind,
@@ -72,6 +97,8 @@ pub struct PluginManifest {
     pub publishes: Vec<String>,
     #[serde(default)]
     pub capabilities: Vec<String>,
+    #[serde(default)]
+    pub capability_claims: Vec<CapabilityClaim>,
 }
 
 #[derive(Default)]
@@ -182,6 +209,19 @@ mod tests {
             subscribes: subscribes.into_iter().map(ToString::to_string).collect(),
             publishes: publishes.into_iter().map(ToString::to_string).collect(),
             capabilities: vec!["capability".to_string()],
+            capability_claims: vec![CapabilityClaim {
+                name: "capability".to_string(),
+                enabled: true,
+                required: true,
+                deterministic: true,
+                replay_safe: true,
+                projection_only: false,
+                emits_artifacts: false,
+                requires_network: false,
+                requires_filesystem: false,
+                requires_gpu: false,
+                max_runtime_ms: Some(1_000),
+            }],
         }
     }
 
@@ -246,6 +286,19 @@ mod tests {
             subscribes: vec!["test.input".to_string()],
             publishes: vec!["test.output".to_string()],
             capabilities: vec!["test_capability".to_string()],
+            capability_claims: vec![CapabilityClaim {
+                name: "test_capability".to_string(),
+                enabled: true,
+                required: false,
+                deterministic: true,
+                replay_safe: true,
+                projection_only: false,
+                emits_artifacts: false,
+                requires_network: false,
+                requires_filesystem: false,
+                requires_gpu: false,
+                max_runtime_ms: Some(5_000),
+            }],
         };
 
         let id = ulid::Ulid::new().to_string();
@@ -259,6 +312,8 @@ mod tests {
         assert_eq!(loaded.transport, TransportKind::Local);
         assert_eq!(loaded.publishes, vec!["test.output"]);
         assert_eq!(loaded.subscribes, vec!["test.input"]);
+        assert_eq!(loaded.capability_claims.len(), 1);
+        assert_eq!(loaded.capability_claims[0].name, "test_capability");
 
         let _ = std::fs::remove_file(path);
     }

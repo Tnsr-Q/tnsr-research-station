@@ -159,6 +159,7 @@ mod tests {
             subscribes: vec!["quantum.analyze".to_string()],
             publishes: vec!["quantum.state".to_string()],
             capabilities: vec!["collapse_ratio".to_string()],
+            capability_claims: vec![],
         }
     }
 

@@ -89,12 +89,7 @@ impl<'a> PolicyEngine<'a> {
             payload["reason"] = json!(reason);
         }
 
-        EventEnvelope::child_of(
-            event,
-            topic,
-            "station_policy",
-            payload,
-        )
+        EventEnvelope::child_of(event, topic, "station_policy", payload)
     }
 
     pub fn admit_event(&self, event: &mut EventEnvelope) -> Result<EventAdmission, PolicyError> {
@@ -107,7 +102,10 @@ impl<'a> PolicyEngine<'a> {
 
         // 2. Source plugin must be allowed to publish event.topic.
         if !self.plugins.can_publish(&event.source, &event.topic) {
-            let reason = format!("plugin {} cannot publish topic {}", event.source, event.topic);
+            let reason = format!(
+                "plugin {} cannot publish topic {}",
+                event.source, event.topic
+            );
             let policy_event = self.create_policy_event(event, false, Some(&reason));
             return Ok(EventAdmission::denied(reason, policy_event));
         }
@@ -120,7 +118,10 @@ impl<'a> PolicyEngine<'a> {
         };
 
         if state != PluginRuntimeState::Admitted && state != PluginRuntimeState::Running {
-            let reason = format!("plugin {} not in publishable state: {state:?}", event.source);
+            let reason = format!(
+                "plugin {} not in publishable state: {state:?}",
+                event.source
+            );
             let policy_event = self.create_policy_event(event, false, Some(&reason));
             return Ok(EventAdmission::denied(reason, policy_event));
         }
@@ -173,6 +174,7 @@ mod tests {
             subscribes: vec!["quantum.analyze".to_string()],
             publishes: vec!["quantum.state".to_string()],
             capabilities: vec!["collapse_ratio".to_string()],
+            capability_claims: vec![],
         }
     }
 
@@ -271,7 +273,10 @@ mod tests {
         let payload = &policy_event.payload;
         assert_eq!(payload["source"], "unknown_plugin");
         assert_eq!(payload["topic"], "quantum.state");
-        assert!(payload["reason"].as_str().unwrap().contains("not registered"));
+        assert!(payload["reason"]
+            .as_str()
+            .unwrap()
+            .contains("not registered"));
     }
 
     #[test]

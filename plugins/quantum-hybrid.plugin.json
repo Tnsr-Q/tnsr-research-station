@@ -6,5 +6,24 @@
   "artifact_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "subscribes": ["quantum.analyze"],
   "publishes": ["quantum.state"],
-  "capabilities": ["collapse_ratio", "euler_characteristic", "galois_order"]
+  "capabilities": [
+    "quantum.state.emit",
+    "artifact.write",
+    "replay.safe"
+  ],
+  "capability_claims": [
+    {
+      "name": "quantum.state.emit",
+      "enabled": true,
+      "required": true,
+      "deterministic": true,
+      "replay_safe": true,
+      "projection_only": false,
+      "emits_artifacts": true,
+      "requires_network": false,
+      "requires_filesystem": false,
+      "requires_gpu": false,
+      "max_runtime_ms": 1000
+    }
+  ]
 }
