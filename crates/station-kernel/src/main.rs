@@ -63,7 +63,16 @@ fn build_plugin_summaries(registry: &PluginRegistry) -> Vec<PluginSummary> {
                 .iter()
                 .map(|c| CapabilityClaimSummary {
                     name: c.name.clone(),
+                    enabled: c.enabled,
+                    required: c.required,
+                    deterministic: c.deterministic,
+                    replay_safe: c.replay_safe,
                     projection_only: c.projection_only,
+                    emits_artifacts: c.emits_artifacts,
+                    requires_network: c.requires_network,
+                    requires_filesystem: c.requires_filesystem,
+                    requires_gpu: c.requires_gpu,
+                    max_runtime_ms: c.max_runtime_ms,
                 })
                 .collect(),
         })

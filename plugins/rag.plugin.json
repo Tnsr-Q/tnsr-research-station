@@ -6,9 +6,31 @@
   "artifact_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "subscribes": ["quantum.state"],
   "publishes": ["rag.result"],
-  "capabilities": ["retrieval", "agent_log_panel"],
+  "capabilities": [
+    "rag.result.emit",
+    "projection.browser",
+    "artifact.write",
+    "replay.safe"
+  ],
   "capability_claims": [
-    { "name": "retrieval", "projection_only": false },
-    { "name": "agent_log_panel", "projection_only": true }
+    {
+      "name": "rag.result.emit",
+      "enabled": true,
+      "required": true,
+      "deterministic": false,
+      "replay_safe": true,
+      "projection_only": false,
+      "emits_artifacts": true,
+      "requires_network": true,
+      "requires_filesystem": false,
+      "requires_gpu": false,
+      "max_runtime_ms": 4000
+    },
+    {
+      "name": "projection.browser",
+      "enabled": true,
+      "projection_only": true,
+      "replay_safe": true
+    }
   ]
 }

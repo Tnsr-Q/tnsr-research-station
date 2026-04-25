@@ -106,7 +106,7 @@ runs/<run_id>/
 - Duplicate publish/subscribe topic rejection
 - Per-plugin publish/subscribe authorization
 - Registry introspection for manifest generation
-- `CapabilityClaim` - structured capability claims with optional `projection_only` flag
+- `CapabilityClaim` - structured capability claims (`enabled`, `required`, `deterministic`, `replay_safe`, `projection_only`, `emits_artifacts`, resource requirements, and optional max runtime)
 - Duplicate capability claim name rejection
 - Empty capability name rejection
 
@@ -504,7 +504,7 @@ A plugin manifest defines:
 - `publishes`
 - `subscribes`
 - `capabilities` (simple string list, retained for backwards compatibility)
-- `capability_claims` (structured claims with `name` and optional `projection_only` flag)
+- `capability_claims` (structured claims with execution, replay, projection, artifact, and resource requirement metadata)
 
 Plugins may only publish topics declared in their manifests.
 
