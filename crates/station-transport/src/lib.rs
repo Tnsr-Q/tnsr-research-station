@@ -324,8 +324,20 @@ impl SubprocessTransport {
         loop {
             match rx.try_recv() {
                 Ok(SidecarLine::Stdout(line)) => {
-                    if let Ok(candidate) = serde_json::from_str::<EventEnvelope>(&line) {
-                        self.candidate_events.push(candidate);
+                    match serde_json::from_str::<EventEnvelope>(&line) {
+                        Ok(candidate) => {
+                            self.candidate_events.push(candidate);
+                        }
+                        Err(error) => {
+                            self.evidence_events.push(self.evidence(
+                                "transport.runtime.stdout_parse_failed",
+                                json!({
+                                    "transport_id": self.id,
+                                    "line": line,
+                                    "error": error.to_string()
+                                }),
+                            ));
+                        }
                     }
                 }
                 Ok(SidecarLine::Stderr(line)) => {
