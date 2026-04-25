@@ -17,15 +17,16 @@ pub fn run_from_env() -> Result<(), KernelError> {
     runtime.register_plugins()?;
     runtime.register_schemas()?;
 
-    let mut event = quantum_state_event(runtime.run_id());
-    let admission = runtime.admit_and_record(&mut event)?;
+    let event = quantum_state_event(runtime.run_id());
+    let admitted = match runtime.admit(event)? {
+        Ok(admitted) => admitted,
+        Err(denial) => {
+            runtime.seal_run_with_reason(station_run::RunStatus::Failed, denial.reason)?;
+            return Ok(());
+        }
+    };
 
-    if !admission.allowed {
-        runtime.seal_run_with_reason(station_run::RunStatus::Failed, admission.reason)?;
-        return Ok(());
-    }
-
-    runtime.publish_admitted(event)?;
+    runtime.publish_admitted(admitted)?;
     runtime.seal_run(station_run::RunStatus::Completed)?;
     Ok(())
 }

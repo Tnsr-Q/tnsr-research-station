@@ -1,5 +1,5 @@
-use std::path::PathBuf;
 use std::fs;
+use std::path::PathBuf;
 
 use adapter_quantum::quantum_state_event;
 use artifact_ledger::{ArtifactLedger, ArtifactRecordRequest};
@@ -7,7 +7,7 @@ use plugin_registry::{load_plugin_manifest_json, PluginRegistry};
 use runtime_core::EventBus;
 use station_policy::PolicyEngine;
 use station_replay::JsonlReplayLog;
-use station_run::{load_run_profile_json, load_manifest_json, RunStatus};
+use station_run::{load_manifest_json, load_run_profile_json, RunStatus, RuntimePermissions};
 use station_schema::{load_schema_json, SchemaRegistry};
 use station_supervisor::{PluginRuntimeState, StationSupervisor};
 
@@ -48,7 +48,16 @@ fn end_to_end_kernel_run_produces_valid_manifest() {
     let mut bus = EventBus::new();
 
     // 3. Setup Supervisor
-    let mut supervisor = StationSupervisor::new(&profile.name);
+    let mut supervisor = StationSupervisor::new_with_permissions(
+        &profile.name,
+        RuntimePermissions {
+            allow_network: true,
+            allow_filesystem: false,
+            allow_gpu: true,
+            allow_projection_only: true,
+            allow_nondeterministic: true,
+        },
+    );
     let run_id = supervisor.session.run_id.clone();
 
     let events_path = test_dir.join("events.jsonl");
@@ -58,7 +67,9 @@ fn end_to_end_kernel_run_produces_valid_manifest() {
     for plugin_path in &profile.plugin_manifests {
         let full_path = root.join(plugin_path);
         let manifest = load_plugin_manifest_json(&full_path).expect("Failed to load plugin");
-        registry.register(manifest.clone()).expect("Failed to register plugin");
+        registry
+            .register(manifest.clone())
+            .expect("Failed to register plugin");
     }
 
     // 5. Open Replay Log
@@ -69,12 +80,19 @@ fn end_to_end_kernel_run_produces_valid_manifest() {
         let full_path = root.join(plugin_path);
         let manifest = load_plugin_manifest_json(&full_path).expect("Failed to load plugin");
 
-        let supervisor_event = supervisor.register_plugin(&manifest).expect("Failed to register plugin");
-        replay.append_record(&supervisor_event).expect("Failed to append supervisor event");
+        let supervisor_event = supervisor
+            .register_plugin(&manifest)
+            .expect("Failed to register plugin");
+        replay
+            .append_record(&supervisor_event)
+            .expect("Failed to append supervisor event");
 
-        let admitted_event = supervisor.transition(&manifest.id, PluginRuntimeState::Admitted)
+        let admitted_event = supervisor
+            .transition(&manifest.id, PluginRuntimeState::Admitted)
             .expect("Failed to transition plugin");
-        replay.append_record(&admitted_event).expect("Failed to append admitted event");
+        replay
+            .append_record(&admitted_event)
+            .expect("Failed to append admitted event");
     }
 
     // 7. Load and register schemas
@@ -94,11 +112,15 @@ fn end_to_end_kernel_run_produces_valid_manifest() {
         supervisor: &supervisor,
     };
 
-    let admission = policy.admit_event(&mut event).expect("Policy admission failed");
+    let admission = policy
+        .admit_event(&mut event)
+        .expect("Policy admission failed");
 
     // Append policy event
     if let Some(policy_event) = admission.policy_event {
-        replay.append_record(&policy_event).expect("Failed to append policy event");
+        replay
+            .append_record(&policy_event)
+            .expect("Failed to append policy event");
     }
 
     assert!(admission.allowed, "Event should be admitted");
@@ -121,15 +143,23 @@ fn end_to_end_kernel_run_produces_valid_manifest() {
     assert_eq!(report.failed, 0, "Event publication should not fail");
 
     let received = rx.recv().expect("Should receive event");
-    replay.append_record(&received).expect("Failed to append event to replay");
+    replay
+        .append_record(&received)
+        .expect("Failed to append event to replay");
 
     // 11. Verify replay chain
     let verification = JsonlReplayLog::verify_chain(&events_path);
     assert!(verification.is_ok(), "Replay chain should be valid");
 
     let verify_report = verification.unwrap();
-    assert!(verify_report.records_verified > 0, "Should have verified records");
-    assert!(verify_report.last_record_hash.is_some(), "Should have last record hash");
+    assert!(
+        verify_report.records_verified > 0,
+        "Should have verified records"
+    );
+    assert!(
+        verify_report.last_record_hash.is_some(),
+        "Should have last record hash"
+    );
 
     // 12. Write manifest (simulating the kernel's manifest generation)
     let manifest = station_run::RunManifest {
@@ -163,8 +193,14 @@ fn end_to_end_kernel_run_produces_valid_manifest() {
     assert_eq!(loaded_manifest.status, RunStatus::Completed);
     assert!(loaded_manifest.replay_valid, "Replay should be valid");
     assert!(loaded_manifest.records_verified > 0);
-    assert!(loaded_manifest.plugin_count >= 2, "Should have at least 2 plugins");
-    assert!(loaded_manifest.schema_count >= 2, "Should have at least 2 schemas");
+    assert!(
+        loaded_manifest.plugin_count >= 2,
+        "Should have at least 2 plugins"
+    );
+    assert!(
+        loaded_manifest.schema_count >= 2,
+        "Should have at least 2 schemas"
+    );
 
     // Cleanup
     let _ = fs::remove_dir_all(&test_dir);
@@ -212,20 +248,30 @@ fn policy_denial_creates_failed_manifest() {
     };
 
     // 7. Attempt to admit event - should be denied because plugin is not registered
-    let admission = policy.admit_event(&mut event).expect("Policy should return admission result");
+    let admission = policy
+        .admit_event(&mut event)
+        .expect("Policy should return admission result");
 
     // Policy should deny the event
-    assert!(!admission.allowed, "Policy should reject event from unregistered plugin");
+    assert!(
+        !admission.allowed,
+        "Policy should reject event from unregistered plugin"
+    );
     assert!(admission.reason.is_some(), "Denial should have a reason");
 
     // Append policy event to replay
     if let Some(policy_event) = admission.policy_event {
-        replay.append_record(&policy_event).expect("Failed to append policy event");
+        replay
+            .append_record(&policy_event)
+            .expect("Failed to append policy event");
     }
 
     // 8. Verify replay chain (should still be valid)
     let verification = JsonlReplayLog::verify_chain(&events_path);
-    assert!(verification.is_ok(), "Replay chain should be valid even with denial");
+    assert!(
+        verification.is_ok(),
+        "Replay chain should be valid even with denial"
+    );
 
     // 9. Write manifest with failed status
     let verify_report = verification.unwrap();
@@ -257,8 +303,14 @@ fn policy_denial_creates_failed_manifest() {
     let loaded_manifest = load_manifest_json(&manifest_path).expect("Failed to load manifest");
 
     assert_eq!(loaded_manifest.status, RunStatus::Failed);
-    assert!(loaded_manifest.failure_reason.is_some(), "Should have failure reason");
-    assert_eq!(loaded_manifest.plugin_count, 0, "No plugins should be registered");
+    assert!(
+        loaded_manifest.failure_reason.is_some(),
+        "Should have failure reason"
+    );
+    assert_eq!(
+        loaded_manifest.plugin_count, 0,
+        "No plugins should be registered"
+    );
     assert!(loaded_manifest.replay_valid, "Replay should still be valid");
 
     // Cleanup
@@ -274,7 +326,16 @@ fn supervisor_lifecycle_events_are_replayable() {
     let profile_path = root.join("profiles/default.profile.json");
     let profile = load_run_profile_json(&profile_path).expect("Failed to load profile");
 
-    let mut supervisor = StationSupervisor::new(&profile.name);
+    let mut supervisor = StationSupervisor::new_with_permissions(
+        &profile.name,
+        RuntimePermissions {
+            allow_network: true,
+            allow_filesystem: false,
+            allow_gpu: true,
+            allow_projection_only: true,
+            allow_nondeterministic: true,
+        },
+    );
 
     let events_path = test_dir.join("events.jsonl");
     let mut replay = JsonlReplayLog::open(&events_path).expect("Failed to open replay log");
@@ -284,20 +345,33 @@ fn supervisor_lifecycle_events_are_replayable() {
     let manifest = load_plugin_manifest_json(&plugin_path).expect("Failed to load plugin");
 
     // Register and transition through states
-    let register_event = supervisor.register_plugin(&manifest).expect("Failed to register");
-    replay.append_record(&register_event).expect("Failed to append");
+    let register_event = supervisor
+        .register_plugin(&manifest)
+        .expect("Failed to register");
+    replay
+        .append_record(&register_event)
+        .expect("Failed to append");
 
-    let admitted_event = supervisor.transition(&manifest.id, PluginRuntimeState::Admitted)
+    let admitted_event = supervisor
+        .transition(&manifest.id, PluginRuntimeState::Admitted)
         .expect("Failed to transition to Admitted");
-    replay.append_record(&admitted_event).expect("Failed to append");
+    replay
+        .append_record(&admitted_event)
+        .expect("Failed to append");
 
-    let starting_event = supervisor.transition(&manifest.id, PluginRuntimeState::Starting)
+    let starting_event = supervisor
+        .transition(&manifest.id, PluginRuntimeState::Starting)
         .expect("Failed to transition to Starting");
-    replay.append_record(&starting_event).expect("Failed to append");
+    replay
+        .append_record(&starting_event)
+        .expect("Failed to append");
 
-    let running_event = supervisor.transition(&manifest.id, PluginRuntimeState::Running)
+    let running_event = supervisor
+        .transition(&manifest.id, PluginRuntimeState::Running)
         .expect("Failed to transition to Running");
-    replay.append_record(&running_event).expect("Failed to append");
+    replay
+        .append_record(&running_event)
+        .expect("Failed to append");
 
     // Verify all events are in replay log
     let verification = JsonlReplayLog::verify_chain(&events_path);

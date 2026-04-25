@@ -1,7 +1,7 @@
+use super::error::RunError;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
-use super::error::RunError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunProfile {
@@ -11,6 +11,26 @@ pub struct RunProfile {
     pub plugin_manifests: Vec<String>,
     #[serde(default)]
     pub schema_files: Vec<String>,
+    #[serde(default)]
+    pub permissions: RuntimePermissions,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RuntimePermissions {
+    #[serde(default)]
+    pub allow_network: bool,
+
+    #[serde(default)]
+    pub allow_filesystem: bool,
+
+    #[serde(default)]
+    pub allow_gpu: bool,
+
+    #[serde(default)]
+    pub allow_projection_only: bool,
+
+    #[serde(default)]
+    pub allow_nondeterministic: bool,
 }
 
 pub fn load_run_profile_json(path: impl AsRef<Path>) -> Result<RunProfile, RunError> {
@@ -47,9 +67,8 @@ mod tests {
                 "plugins/quantum.plugin.json".into(),
                 "plugins/rag.plugin.json".into(),
             ],
-            schema_files: vec![
-                "schemas/quantum.schema.json".into(),
-            ],
+            schema_files: vec!["schemas/quantum.schema.json".into()],
+            permissions: RuntimePermissions::default(),
         };
 
         write_run_profile_json(&profile, &path).unwrap();
@@ -59,6 +78,8 @@ mod tests {
         assert_eq!(loaded.description, Some("Test profile description".into()));
         assert_eq!(loaded.plugin_manifests.len(), 2);
         assert_eq!(loaded.schema_files.len(), 1);
+        assert!(!loaded.permissions.allow_network);
+        assert!(!loaded.permissions.allow_gpu);
 
         let _ = std::fs::remove_file(path);
     }

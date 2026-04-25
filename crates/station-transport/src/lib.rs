@@ -570,7 +570,10 @@ mod tests {
 
         let result = transport.start();
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), TransportError::AlreadyStarted));
+        assert!(matches!(
+            result.unwrap_err(),
+            TransportError::AlreadyStarted
+        ));
     }
 
     #[test]
@@ -628,7 +631,10 @@ mod tests {
 
         let result = transport.start();
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), TransportError::AlreadyStarted));
+        assert!(matches!(
+            result.unwrap_err(),
+            TransportError::AlreadyStarted
+        ));
     }
 
     #[test]
@@ -645,7 +651,12 @@ mod tests {
         let mut transport = SubprocessTransport::new("test-subprocess", "/bin/cat", vec![]);
         assert_eq!(transport.id(), "test-subprocess");
 
-        let result = transport.send(&EventEnvelope::new("run-test", "test.topic", "test_plugin", json!({})));
+        let result = transport.send(&EventEnvelope::new(
+            "run-test",
+            "test.topic",
+            "test_plugin",
+            json!({}),
+        ));
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), TransportError::NotStarted));
 
@@ -662,7 +673,12 @@ mod tests {
         let mut transport = WebSocketTransport::new("test-ws", "ws://localhost:8080");
         assert_eq!(transport.id(), "test-ws");
 
-        let result = transport.send(&EventEnvelope::new("run-test", "test.topic", "test_plugin", json!({})));
+        let result = transport.send(&EventEnvelope::new(
+            "run-test",
+            "test.topic",
+            "test_plugin",
+            json!({}),
+        ));
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), TransportError::NotStarted));
 
@@ -679,7 +695,12 @@ mod tests {
         let mut transport = GrpcTransport::new("test-grpc", "http://localhost:50051");
         assert_eq!(transport.id(), "test-grpc");
 
-        let result = transport.send(&EventEnvelope::new("run-test", "test.topic", "test_plugin", json!({})));
+        let result = transport.send(&EventEnvelope::new(
+            "run-test",
+            "test.topic",
+            "test_plugin",
+            json!({}),
+        ));
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), TransportError::NotStarted));
 
@@ -696,7 +717,12 @@ mod tests {
         let mut transport = ConnectRpcTransport::new("test-connect", "http://localhost:8081");
         assert_eq!(transport.id(), "test-connect");
 
-        let result = transport.send(&EventEnvelope::new("run-test", "test.topic", "test_plugin", json!({})));
+        let result = transport.send(&EventEnvelope::new(
+            "run-test",
+            "test.topic",
+            "test_plugin",
+            json!({}),
+        ));
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), TransportError::NotStarted));
 
@@ -713,7 +739,12 @@ mod tests {
         let mut transport = Pyro5Transport::new("test-pyro5", "PYRO:obj_12345@localhost:9090");
         assert_eq!(transport.id(), "test-pyro5");
 
-        let result = transport.send(&EventEnvelope::new("run-test", "test.topic", "test_plugin", json!({})));
+        let result = transport.send(&EventEnvelope::new(
+            "run-test",
+            "test.topic",
+            "test_plugin",
+            json!({}),
+        ));
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), TransportError::NotStarted));
 
@@ -730,7 +761,12 @@ mod tests {
         let mut transport = FfiTransport::new("test-ffi", "/usr/lib/libtest.so");
         assert_eq!(transport.id(), "test-ffi");
 
-        let result = transport.send(&EventEnvelope::new("run-test", "test.topic", "test_plugin", json!({})));
+        let result = transport.send(&EventEnvelope::new(
+            "run-test",
+            "test.topic",
+            "test_plugin",
+            json!({}),
+        ));
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), TransportError::NotStarted));
 
