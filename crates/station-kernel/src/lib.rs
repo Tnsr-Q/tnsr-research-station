@@ -1,4 +1,4 @@
-pub mod admission;
+mod admission;
 pub mod closure;
 pub mod context;
 pub mod errors;
@@ -6,6 +6,7 @@ pub mod runtime;
 
 use adapter_quantum::quantum_state_event;
 
+pub use admission::AdmittedEvent;
 pub use errors::KernelError;
 pub use runtime::KernelRuntime;
 

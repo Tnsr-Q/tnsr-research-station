@@ -5,8 +5,37 @@ use crate::{context::KernelContext, errors::KernelError};
 
 #[derive(Debug, Clone)]
 pub struct AdmittedEvent {
-    pub event: EventEnvelope,
-    pub policy_event_id: String,
+    event: EventEnvelope,
+    policy_event_id: String,
+}
+
+impl AdmittedEvent {
+    pub(crate) fn new(event: EventEnvelope, policy_event_id: String) -> Self {
+        Self {
+            event,
+            policy_event_id,
+        }
+    }
+
+    pub(crate) fn into_parts(self) -> (EventEnvelope, String) {
+        (self.event, self.policy_event_id)
+    }
+
+    pub fn policy_event_id(&self) -> &str {
+        &self.policy_event_id
+    }
+
+    pub fn event_id(&self) -> &str {
+        &self.event.event_id
+    }
+
+    pub fn topic(&self) -> &str {
+        &self.event.topic
+    }
+
+    pub fn source(&self) -> &str {
+        &self.event.source
+    }
 }
 
 pub fn admit_and_record(
@@ -31,10 +60,7 @@ pub fn admit_and_record(
             .as_ref()
             .map(|event| event.event_id.clone())
             .unwrap_or_default();
-        return Ok(Ok(AdmittedEvent {
-            event,
-            policy_event_id,
-        }));
+        return Ok(Ok(AdmittedEvent::new(event, policy_event_id)));
     }
 
     Ok(Err(admission))
