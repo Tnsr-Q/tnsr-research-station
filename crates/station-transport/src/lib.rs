@@ -991,6 +991,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "subprocess")]
+    #[cfg(unix)]
     fn test_subprocess_transport_basic() {
         let mut transport = SubprocessTransport::new("test-subprocess", "/bin/cat", vec![]);
         assert_eq!(transport.id(), "test-subprocess");
