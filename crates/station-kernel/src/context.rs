@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -8,6 +9,7 @@ use station_replay::JsonlReplayLog;
 use station_run::{load_run_profile_json, RunProfile};
 use station_schema::{load_schema_json, SchemaRegistry};
 use station_supervisor::StationSupervisor;
+use station_transport::Transport;
 
 use crate::errors::KernelError;
 
@@ -24,6 +26,7 @@ pub struct KernelContext {
     pub bus: EventBus,
     pub supervisor: StationSupervisor,
     pub replay: JsonlReplayLog,
+    pub transports: HashMap<String, Box<dyn Transport>>,
 }
 
 impl KernelContext {
@@ -54,6 +57,7 @@ impl KernelContext {
             bus: EventBus::new(),
             supervisor,
             replay: JsonlReplayLog::open(events_path)?,
+            transports: HashMap::new(),
         })
     }
 
