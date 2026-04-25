@@ -1107,15 +1107,30 @@ mod tests {
         runtime
             .start_plugin("test_subprocess_stderr")
             .expect("subprocess should start");
-        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let stderr_seen = loop {
+            let events = JsonlReplayLog::read_all_events(runtime.context.events_path.clone())
+                .expect("events should be readable");
+            if events
+                .iter()
+                .any(|event| event.topic == "transport.runtime.stderr")
+            {
+                break true;
+            }
+            if std::time::Instant::now() >= deadline {
+                break false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+
         runtime
             .stop_plugin("test_subprocess_stderr")
             .expect("stop should succeed");
-        let events = JsonlReplayLog::read_all_events(runtime.context.events_path.clone())
-            .expect("events should be readable");
-        assert!(events
-            .iter()
-            .any(|event| event.topic == "transport.runtime.stderr"));
+        assert!(
+            stderr_seen,
+            "expected transport.runtime.stderr evidence before timeout"
+        );
     }
 
     #[cfg(feature = "subprocess")]
