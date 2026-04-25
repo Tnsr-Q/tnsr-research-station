@@ -35,7 +35,8 @@ impl KernelContext {
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
 
-        let supervisor = StationSupervisor::new(&profile.name);
+        let supervisor =
+            StationSupervisor::new_with_permissions(&profile.name, profile.permissions.clone());
         let run_dir = PathBuf::from("runs").join(&supervisor.session.run_id);
         let events_path = run_dir.join("events.jsonl");
         let manifest_path = run_dir.join("manifest.json");

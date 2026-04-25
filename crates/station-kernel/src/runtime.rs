@@ -2,12 +2,12 @@ use std::path::Path;
 
 use artifact_ledger::ArtifactRecordRequest;
 use runtime_core::{EventEnvelope, PublishReport};
-use station_policy::EventAdmission;
 use station_run::{RunManifest, RunStatus};
 use station_supervisor::PluginRuntimeState;
 
 use crate::{
-    admission, closure,
+    admission::{self, AdmittedEvent},
+    closure,
     context::{load_profile_plugin_manifest, load_profile_schema, KernelContext},
     errors::KernelError,
 };
@@ -56,17 +56,20 @@ impl KernelRuntime {
         Ok(())
     }
 
-    pub fn admit_and_record(
+    pub fn admit(
         &mut self,
-        event: &mut EventEnvelope,
-    ) -> Result<EventAdmission, KernelError> {
+        event: EventEnvelope,
+    ) -> Result<Result<AdmittedEvent, station_policy::EventAdmission>, KernelError> {
         admission::admit_and_record(&mut self.context, event)
     }
 
     pub fn publish_admitted(
         &mut self,
-        mut event: EventEnvelope,
+        admitted: AdmittedEvent,
     ) -> Result<PublishReport, KernelError> {
+        let mut event = admitted.event;
+        let _policy_event_id = admitted.policy_event_id;
+
         let payload_bytes = serde_json::to_vec(&event.payload)?;
         let artifact = self.context.ledger.record_bytes(ArtifactRecordRequest {
             artifact_id: format!("{}_payload", event.topic.replace('.', "_")),
@@ -97,7 +100,7 @@ impl KernelRuntime {
         closure::seal_run(self.context, status, None)
     }
 
-    pub(crate) fn seal_run_with_reason(
+    pub fn seal_run_with_reason(
         self,
         status: RunStatus,
         failure_reason: Option<String>,
@@ -150,15 +153,15 @@ mod tests {
             .register_schemas()
             .expect("schemas should register successfully");
 
-        let mut event = quantum_state_event("test-run".to_string());
+        let event = quantum_state_event("test-run".to_string());
         let admission = runtime
-            .admit_and_record(&mut event)
+            .admit(event)
             .expect("admission should return result");
 
-        assert!(!admission.allowed);
+        let denied = admission.expect_err("event should be denied without admitted plugin");
 
         let manifest = runtime
-            .seal_run_with_reason(RunStatus::Failed, admission.reason.clone())
+            .seal_run_with_reason(RunStatus::Failed, denied.reason.clone())
             .expect("failed run should still seal");
 
         assert_eq!(manifest.status, RunStatus::Failed);

@@ -10,6 +10,12 @@ pub enum PolicyError {
     Schema(#[from] SchemaError),
 }
 
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+#[error("policy denied: {reason}")]
+pub struct PolicyDenied {
+    pub reason: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct EventAdmission {
     pub allowed: bool,
@@ -34,12 +40,17 @@ impl EventAdmission {
         }
     }
 
-    pub fn assert_allowed(&self) {
-        assert!(
-            self.allowed,
-            "event denied: {}",
-            self.reason.as_deref().unwrap_or("unknown policy reason")
-        );
+    pub fn ensure_allowed(&self) -> Result<(), PolicyDenied> {
+        if self.allowed {
+            Ok(())
+        } else {
+            Err(PolicyDenied {
+                reason: self
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| "unknown policy reason".to_string()),
+            })
+        }
     }
 }
 
@@ -89,12 +100,7 @@ impl<'a> PolicyEngine<'a> {
             payload["reason"] = json!(reason);
         }
 
-        EventEnvelope::child_of(
-            event,
-            topic,
-            "station_policy",
-            payload,
-        )
+        EventEnvelope::child_of(event, topic, "station_policy", payload)
     }
 
     pub fn admit_event(&self, event: &mut EventEnvelope) -> Result<EventAdmission, PolicyError> {
@@ -107,7 +113,10 @@ impl<'a> PolicyEngine<'a> {
 
         // 2. Source plugin must be allowed to publish event.topic.
         if !self.plugins.can_publish(&event.source, &event.topic) {
-            let reason = format!("plugin {} cannot publish topic {}", event.source, event.topic);
+            let reason = format!(
+                "plugin {} cannot publish topic {}",
+                event.source, event.topic
+            );
             let policy_event = self.create_policy_event(event, false, Some(&reason));
             return Ok(EventAdmission::denied(reason, policy_event));
         }
@@ -120,7 +129,10 @@ impl<'a> PolicyEngine<'a> {
         };
 
         if state != PluginRuntimeState::Admitted && state != PluginRuntimeState::Running {
-            let reason = format!("plugin {} not in publishable state: {state:?}", event.source);
+            let reason = format!(
+                "plugin {} not in publishable state: {state:?}",
+                event.source
+            );
             let policy_event = self.create_policy_event(event, false, Some(&reason));
             return Ok(EventAdmission::denied(reason, policy_event));
         }
@@ -272,7 +284,10 @@ mod tests {
         let payload = &policy_event.payload;
         assert_eq!(payload["source"], "unknown_plugin");
         assert_eq!(payload["topic"], "quantum.state");
-        assert!(payload["reason"].as_str().unwrap().contains("not registered"));
+        assert!(payload["reason"]
+            .as_str()
+            .unwrap()
+            .contains("not registered"));
     }
 
     #[test]

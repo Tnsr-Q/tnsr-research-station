@@ -17,15 +17,17 @@ pub fn seal_run(
     failure_reason: Option<String>,
 ) -> Result<RunManifest, KernelError> {
     let manifest = build_run_manifest(
-        context.supervisor.session.run_id,
-        context.supervisor.session.profile_name,
-        status,
-        context.started_at_ms,
+        BuildManifestInput {
+            run_id: context.supervisor.session.run_id,
+            profile_name: context.supervisor.session.profile_name,
+            status,
+            started_at_ms: context.started_at_ms,
+            failure_reason,
+        },
         &context.events_path,
         &context.registry,
         &context.schemas,
         &context.ledger,
-        failure_reason,
     )?;
 
     write_manifest_json(&manifest, &context.manifest_path)?;
@@ -148,16 +150,20 @@ fn build_artifact_summaries(ledger: &ArtifactLedger) -> Vec<ArtifactSummary> {
     artifacts
 }
 
-fn build_run_manifest(
+struct BuildManifestInput {
     run_id: String,
     profile_name: String,
     status: RunStatus,
     started_at_ms: u128,
+    failure_reason: Option<String>,
+}
+
+fn build_run_manifest(
+    input: BuildManifestInput,
     events_path: &std::path::Path,
     registry: &PluginRegistry,
     schemas: &SchemaRegistry,
     ledger: &ArtifactLedger,
-    failure_reason: Option<String>,
 ) -> Result<RunManifest, KernelError> {
     let (records_verified, last_hash, verification_error) =
         match JsonlReplayLog::verify_chain(events_path) {
@@ -172,18 +178,18 @@ fn build_run_manifest(
     let replay_valid = verification_error.is_none();
 
     Ok(RunManifest {
-        run_id,
-        profile_name,
-        status,
+        run_id: input.run_id,
+        profile_name: input.profile_name,
+        status: input.status,
         event_log_path: "events.jsonl".into(),
         manifest_path: "manifest.json".into(),
-        started_at_ms,
+        started_at_ms: input.started_at_ms,
         completed_at_ms: Some(now_ms()?),
         records_verified,
         last_record_hash: last_hash,
         replay_valid,
         verification_error,
-        failure_reason,
+        failure_reason: input.failure_reason,
         plugin_count: plugins.len(),
         schema_count: schema_summaries.len(),
         artifact_count: artifacts.len(),

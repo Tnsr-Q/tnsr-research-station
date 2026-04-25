@@ -114,7 +114,7 @@ fn profile_references_existing_plugins() {
         );
 
         let manifest = load_plugin_manifest_json(&full_path)
-            .expect(&format!("Failed to load plugin manifest {}", plugin_path));
+            .unwrap_or_else(|_| panic!("Failed to load plugin manifest {}", plugin_path));
         assert!(!manifest.id.is_empty(), "Plugin manifest should have an id");
     }
 }
@@ -134,8 +134,8 @@ fn profile_references_existing_schemas() {
             schema_path
         );
 
-        let schema =
-            load_schema_json(&full_path).expect(&format!("Failed to load schema {}", schema_path));
+        let schema = load_schema_json(&full_path)
+            .unwrap_or_else(|_| panic!("Failed to load schema {}", schema_path));
         assert!(!schema.topic.is_empty(), "Schema should have a topic");
     }
 }
@@ -209,11 +209,11 @@ fn all_profile_plugins_can_be_registered() {
     for plugin_path in &profile.plugin_manifests {
         let full_path = root.join(plugin_path);
         let manifest = load_plugin_manifest_json(&full_path)
-            .expect(&format!("Failed to load plugin manifest {}", plugin_path));
+            .unwrap_or_else(|_| panic!("Failed to load plugin manifest {}", plugin_path));
 
         registry
             .register(manifest)
-            .expect(&format!("Failed to register plugin from {}", plugin_path));
+            .unwrap_or_else(|_| panic!("Failed to register plugin from {}", plugin_path));
     }
 
     // Should have registered at least 2 plugins (quantum and rag)
@@ -233,12 +233,12 @@ fn all_profile_schemas_can_be_registered() {
 
     for schema_path in &profile.schema_files {
         let full_path = root.join(schema_path);
-        let schema =
-            load_schema_json(&full_path).expect(&format!("Failed to load schema {}", schema_path));
+        let schema = load_schema_json(&full_path)
+            .unwrap_or_else(|_| panic!("Failed to load schema {}", schema_path));
 
         registry
             .register(schema)
-            .expect(&format!("Failed to register schema from {}", schema_path));
+            .unwrap_or_else(|_| panic!("Failed to register schema from {}", schema_path));
     }
 
     // Should have registered at least 2 schemas
