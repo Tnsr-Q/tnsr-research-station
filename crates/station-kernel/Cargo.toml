@@ -24,3 +24,7 @@ thiserror = "1"
 
 [dev-dependencies]
 station_replay = { path = "../station-replay", features = ["debug-hooks"] }
+
+[features]
+default = []
+subprocess = ["station_transport/subprocess"]

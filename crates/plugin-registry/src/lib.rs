@@ -84,6 +84,18 @@ pub struct CapabilityClaim {
     pub max_runtime_ms: Option<u64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PluginTransportConfig {
+    pub endpoint: Option<String>,
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Vec<String>,
+    pub working_dir: Option<String>,
+    #[serde(default)]
+    pub env_allowlist: Vec<String>,
+    pub timeout_ms: Option<u64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginManifest {
     pub id: String,
@@ -99,6 +111,8 @@ pub struct PluginManifest {
     pub capabilities: Vec<String>,
     #[serde(default)]
     pub capability_claims: Vec<CapabilityClaim>,
+    #[serde(default)]
+    pub transport_config: PluginTransportConfig,
 }
 
 #[derive(Default)]
@@ -235,6 +249,7 @@ mod tests {
             publishes: publishes.into_iter().map(ToString::to_string).collect(),
             capabilities: vec!["capability".to_string()],
             capability_claims: vec![],
+            transport_config: PluginTransportConfig::default(),
         }
     }
 
@@ -303,6 +318,7 @@ mod tests {
                 name: "test_claim".to_string(),
                 ..Default::default()
             }],
+            transport_config: PluginTransportConfig::default(),
         };
 
         let id = ulid::Ulid::new().to_string();
@@ -352,6 +368,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            transport_config: PluginTransportConfig::default(),
         };
 
         let id = ulid::Ulid::new().to_string();
@@ -402,6 +419,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            transport_config: PluginTransportConfig::default(),
         };
 
         let result = registry.register(manifest);
@@ -428,6 +446,7 @@ mod tests {
                 name: "  ".to_string(),
                 ..Default::default()
             }],
+            transport_config: PluginTransportConfig::default(),
         };
 
         let result = registry.register(manifest);

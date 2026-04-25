@@ -4,9 +4,9 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::path::{Path, PathBuf};
 #[cfg(all(unix, feature = "debug-hooks"))]
 use std::os::fd::FromRawFd;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReplayError {

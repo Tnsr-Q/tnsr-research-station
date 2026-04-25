@@ -129,9 +129,12 @@ impl KernelRuntime {
         let transport_config = TransportConfig {
             id: format!("plugin:{plugin_id}"),
             kind: factory_transport_kind(&manifest.transport),
-            endpoint: None,
-            command: None,
-            args: vec![],
+            endpoint: manifest.transport_config.endpoint.clone(),
+            command: manifest.transport_config.command.clone(),
+            args: manifest.transport_config.args.clone(),
+            working_dir: manifest.transport_config.working_dir.clone(),
+            env_allowlist: manifest.transport_config.env_allowlist.clone(),
+            timeout_ms: manifest.transport_config.timeout_ms,
         };
 
         let mut transport = match build_transport(&transport_config) {
@@ -197,6 +200,10 @@ impl KernelRuntime {
                 self.record_transport_failed(plugin_id, "stop", &transport_id, err.to_string())?;
                 return Err(KernelError::Transport(err));
             }
+            let evidence_events = transport.drain_evidence_events();
+            for evidence in evidence_events {
+                self.context.replay.append_record(&evidence)?;
+            }
         }
 
         let stopped_transition = self
@@ -252,6 +259,34 @@ impl KernelRuntime {
         }
 
         Ok(())
+    }
+
+    pub fn drain_plugin_outputs(
+        &mut self,
+        plugin_id: &str,
+    ) -> Result<Vec<AdmittedEvent>, KernelError> {
+        let transport = self
+            .context
+            .transports
+            .get_mut(plugin_id)
+            .ok_or(KernelError::Transport(TransportError::NotStarted))?;
+
+        let evidence_events = transport.drain_evidence_events();
+        let candidate_events = transport.drain_candidate_events();
+
+        for evidence in evidence_events {
+            self.context.replay.append_record(&evidence)?;
+        }
+
+        let mut admitted_events = Vec::new();
+        for candidate in candidate_events {
+            match self.admit(candidate)? {
+                Ok(admitted) => admitted_events.push(admitted),
+                Err(_denied) => {}
+            }
+        }
+
+        Ok(admitted_events)
     }
 
     pub fn seal_run(self, status: RunStatus) -> Result<RunManifest, KernelError> {
@@ -360,7 +395,7 @@ mod tests {
     use std::path::PathBuf;
 
     use adapter_quantum::quantum_state_event;
-    use plugin_registry::{PluginKind, PluginManifest, TransportKind};
+    use plugin_registry::{PluginKind, PluginManifest, PluginTransportConfig, TransportKind};
     use station_replay::JsonlReplayLog;
     use station_run::RunStatus;
 
@@ -422,6 +457,7 @@ mod tests {
             publishes: publishes.into_iter().map(ToString::to_string).collect(),
             capabilities: vec![],
             capability_claims: vec![],
+            transport_config: PluginTransportConfig::default(),
         };
         runtime
             .context
@@ -442,6 +478,35 @@ mod tests {
             .context
             .supervisor
             .transition(plugin_id, PluginRuntimeState::Admitted)
+            .expect("admit plugin");
+        runtime
+            .context
+            .replay
+            .append_record(&admitted_event)
+            .expect("append admitted event");
+    }
+
+    #[cfg(feature = "subprocess")]
+    fn register_admitted_plugin_manifest(runtime: &mut KernelRuntime, manifest: PluginManifest) {
+        runtime
+            .context
+            .registry
+            .register(manifest.clone())
+            .expect("register plugin");
+        let registered_event = runtime
+            .context
+            .supervisor
+            .register_plugin(&manifest)
+            .expect("register plugin with supervisor");
+        runtime
+            .context
+            .replay
+            .append_record(&registered_event)
+            .expect("append registered event");
+        let admitted_event = runtime
+            .context
+            .supervisor
+            .transition(&manifest.id, PluginRuntimeState::Admitted)
             .expect("admit plugin");
         runtime
             .context
@@ -945,5 +1010,320 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(runtime.run_dir());
+    }
+
+    #[cfg(feature = "subprocess")]
+    #[cfg(unix)]
+    #[test]
+    fn subprocess_manifest_requires_command_when_feature_enabled() {
+        let mut runtime =
+            KernelRuntime::from_profile_path(root_profile_path()).expect("runtime should init");
+        register_admitted_plugin_with_topics(
+            &mut runtime,
+            "test_subprocess_no_command",
+            TransportKind::Subprocess,
+            vec!["quantum.state"],
+            vec!["quantum.state"],
+        );
+
+        let result = runtime.start_plugin("test_subprocess_no_command");
+        assert!(matches!(result, Err(KernelError::Transport(_))));
+
+        let events = JsonlReplayLog::read_all_events(runtime.context.events_path.clone())
+            .expect("events should be readable");
+        assert!(events.iter().any(|event| {
+            event.topic == "transport.runtime.failed"
+                && event.payload["plugin_id"] == "test_subprocess_no_command"
+                && event.payload["reason"]
+                    == "transport error: subprocess transport requires command"
+        }));
+    }
+
+    #[cfg(feature = "subprocess")]
+    #[cfg(unix)]
+    #[test]
+    fn kernel_starts_subprocess_from_manifest_transport_config() {
+        let mut runtime =
+            KernelRuntime::from_profile_path(root_profile_path()).expect("runtime should init");
+        let manifest = PluginManifest {
+            id: "test_subprocess_manifest".to_string(),
+            kind: PluginKind::Compute,
+            transport: TransportKind::Subprocess,
+            version: "0.1.0".to_string(),
+            artifact_hash:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                    .to_string(),
+            subscribes: vec!["quantum.state".to_string()],
+            publishes: vec!["quantum.state".to_string()],
+            capabilities: vec![],
+            capability_claims: vec![],
+            transport_config: PluginTransportConfig {
+                command: Some("/bin/cat".to_string()),
+                timeout_ms: Some(50),
+                ..PluginTransportConfig::default()
+            },
+        };
+        register_admitted_plugin_manifest(&mut runtime, manifest);
+
+        runtime
+            .start_plugin("test_subprocess_manifest")
+            .expect("subprocess plugin should start");
+        assert!(runtime
+            .context
+            .transports
+            .contains_key("test_subprocess_manifest"));
+    }
+
+    #[cfg(feature = "subprocess")]
+    #[cfg(unix)]
+    #[test]
+    fn kernel_drains_subprocess_stderr_as_replay_evidence() {
+        let mut runtime =
+            KernelRuntime::from_profile_path(root_profile_path()).expect("runtime should init");
+        register_admitted_plugin_manifest(
+            &mut runtime,
+            PluginManifest {
+                id: "test_subprocess_stderr".to_string(),
+                kind: PluginKind::Compute,
+                transport: TransportKind::Subprocess,
+                version: "0.1.0".to_string(),
+                artifact_hash:
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                        .to_string(),
+                subscribes: vec!["quantum.state".to_string()],
+                publishes: vec!["quantum.state".to_string()],
+                capabilities: vec![],
+                capability_claims: vec![],
+                transport_config: PluginTransportConfig {
+                    command: Some("/bin/sh".to_string()),
+                    args: vec![
+                        "-lc".to_string(),
+                        "echo 'stderr-line' 1>&2; sleep 0.1".to_string(),
+                    ],
+                    ..PluginTransportConfig::default()
+                },
+            },
+        );
+        runtime
+            .start_plugin("test_subprocess_stderr")
+            .expect("subprocess should start");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        runtime
+            .stop_plugin("test_subprocess_stderr")
+            .expect("stop should succeed");
+        let events = JsonlReplayLog::read_all_events(runtime.context.events_path.clone())
+            .expect("events should be readable");
+        assert!(events
+            .iter()
+            .any(|event| event.topic == "transport.runtime.stderr"));
+    }
+
+    #[cfg(feature = "subprocess")]
+    #[cfg(unix)]
+    #[test]
+    fn kernel_rejects_unadmitted_subprocess_stdout_event() {
+        let mut runtime =
+            KernelRuntime::from_profile_path(root_profile_path()).expect("runtime should init");
+        runtime
+            .register_schemas()
+            .expect("schemas should register successfully");
+        register_admitted_plugin_manifest(
+            &mut runtime,
+            PluginManifest {
+                id: "test_subprocess_denied".to_string(),
+                kind: PluginKind::Compute,
+                transport: TransportKind::Subprocess,
+                version: "0.1.0".to_string(),
+                artifact_hash:
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                        .to_string(),
+                subscribes: vec!["quantum.state".to_string()],
+                publishes: vec![],
+                capabilities: vec![],
+                capability_claims: vec![],
+                transport_config: PluginTransportConfig {
+                    command: Some("/bin/cat".to_string()),
+                    ..PluginTransportConfig::default()
+                },
+            },
+        );
+        runtime
+            .start_plugin("test_subprocess_denied")
+            .expect("subprocess should start");
+        let event = EventEnvelope::new(
+            runtime.run_id(),
+            "quantum.state",
+            "test_subprocess_denied",
+            json!({"state_dim": 1, "collapse_ratio": 0.5, "euler_characteristic": 1}),
+        );
+        let admitted = AdmittedEvent::new(event, "policy-event-id".to_string());
+        runtime
+            .send_to_plugin("test_subprocess_denied", &admitted)
+            .expect("send should succeed");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        runtime
+            .send_to_plugin("test_subprocess_denied", &admitted)
+            .expect("send should succeed");
+
+        let admitted_events = runtime
+            .drain_plugin_outputs("test_subprocess_denied")
+            .expect("drain should succeed");
+        assert!(admitted_events.is_empty());
+
+        let events = JsonlReplayLog::read_all_events(runtime.context.events_path.clone())
+            .expect("events should be readable");
+        assert!(events
+            .iter()
+            .any(|event| event.topic == "policy.event.denied"));
+    }
+
+    #[cfg(feature = "subprocess")]
+    #[cfg(unix)]
+    #[test]
+    fn kernel_admits_valid_subprocess_stdout_event_before_publish() {
+        let mut runtime =
+            KernelRuntime::from_profile_path(root_profile_path()).expect("runtime should init");
+        runtime
+            .register_schemas()
+            .expect("schemas should register successfully");
+        register_admitted_plugin_manifest(
+            &mut runtime,
+            PluginManifest {
+                id: "test_subprocess_allowed".to_string(),
+                kind: PluginKind::Compute,
+                transport: TransportKind::Subprocess,
+                version: "0.1.0".to_string(),
+                artifact_hash:
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                        .to_string(),
+                subscribes: vec!["quantum.state".to_string()],
+                publishes: vec!["quantum.state".to_string()],
+                capabilities: vec![],
+                capability_claims: vec![],
+                transport_config: PluginTransportConfig {
+                    command: Some("/bin/cat".to_string()),
+                    ..PluginTransportConfig::default()
+                },
+            },
+        );
+        runtime
+            .start_plugin("test_subprocess_allowed")
+            .expect("subprocess should start");
+        let event = EventEnvelope::new(
+            runtime.run_id(),
+            "quantum.state",
+            "test_subprocess_allowed",
+            json!({"state_dim": 1, "collapse_ratio": 0.5, "euler_characteristic": 1}),
+        );
+        let admitted = AdmittedEvent::new(event, "policy-event-id".to_string());
+        runtime
+            .send_to_plugin("test_subprocess_allowed", &admitted)
+            .expect("send should succeed");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        runtime
+            .send_to_plugin("test_subprocess_allowed", &admitted)
+            .expect("send should succeed");
+
+        let admitted_events = runtime
+            .drain_plugin_outputs("test_subprocess_allowed")
+            .expect("drain should succeed");
+        assert_eq!(admitted_events.len(), 1);
+        assert_eq!(admitted_events[0].topic(), "quantum.state");
+    }
+
+    #[cfg(feature = "subprocess")]
+    #[cfg(unix)]
+    #[test]
+    fn subprocess_candidate_event_cannot_bypass_policy_engine() {
+        let mut runtime =
+            KernelRuntime::from_profile_path(root_profile_path()).expect("runtime should init");
+        runtime
+            .register_schemas()
+            .expect("schemas should register successfully");
+        register_admitted_plugin_manifest(
+            &mut runtime,
+            PluginManifest {
+                id: "test_subprocess_bypass".to_string(),
+                kind: PluginKind::Compute,
+                transport: TransportKind::Subprocess,
+                version: "0.1.0".to_string(),
+                artifact_hash:
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                        .to_string(),
+                subscribes: vec!["quantum.state".to_string()],
+                publishes: vec![],
+                capabilities: vec![],
+                capability_claims: vec![],
+                transport_config: PluginTransportConfig {
+                    command: Some("/bin/cat".to_string()),
+                    ..PluginTransportConfig::default()
+                },
+            },
+        );
+        runtime
+            .start_plugin("test_subprocess_bypass")
+            .expect("subprocess should start");
+        let event = EventEnvelope::new(
+            runtime.run_id(),
+            "quantum.state",
+            "test_subprocess_bypass",
+            json!({"state_dim": 1, "collapse_ratio": 0.5, "euler_characteristic": 1}),
+        );
+        let admitted = AdmittedEvent::new(event, "policy-event-id".to_string());
+        runtime
+            .send_to_plugin("test_subprocess_bypass", &admitted)
+            .expect("send should succeed");
+
+        let admitted_events = runtime
+            .drain_plugin_outputs("test_subprocess_bypass")
+            .expect("drain should succeed");
+        assert!(admitted_events.is_empty());
+
+        let events = JsonlReplayLog::read_all_events(runtime.context.events_path.clone())
+            .expect("events should be readable");
+        assert!(!events.iter().any(
+            |event| event.source == "test_subprocess_bypass" && event.topic == "quantum.state"
+        ));
+    }
+
+    #[cfg(feature = "subprocess")]
+    #[cfg(unix)]
+    #[test]
+    fn subprocess_timeout_evidence_is_appended_to_replay() {
+        let mut runtime =
+            KernelRuntime::from_profile_path(root_profile_path()).expect("runtime should init");
+        register_admitted_plugin_manifest(
+            &mut runtime,
+            PluginManifest {
+                id: "test_subprocess_timeout".to_string(),
+                kind: PluginKind::Compute,
+                transport: TransportKind::Subprocess,
+                version: "0.1.0".to_string(),
+                artifact_hash:
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                        .to_string(),
+                subscribes: vec!["quantum.state".to_string()],
+                publishes: vec!["quantum.state".to_string()],
+                capabilities: vec![],
+                capability_claims: vec![],
+                transport_config: PluginTransportConfig {
+                    command: Some("/bin/sleep".to_string()),
+                    args: vec!["5".to_string()],
+                    timeout_ms: Some(10),
+                    ..PluginTransportConfig::default()
+                },
+            },
+        );
+        runtime
+            .start_plugin("test_subprocess_timeout")
+            .expect("subprocess should start");
+        runtime
+            .stop_plugin("test_subprocess_timeout")
+            .expect("stop should succeed");
+        let events = JsonlReplayLog::read_all_events(runtime.context.events_path.clone())
+            .expect("events should be readable");
+        assert!(events
+            .iter()
+            .any(|event| event.topic == "transport.runtime.timeout"));
     }
 }

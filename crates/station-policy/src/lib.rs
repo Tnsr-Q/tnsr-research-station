@@ -188,7 +188,7 @@ impl<'a> PolicyEngine<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use plugin_registry::{PluginKind, PluginManifest, TransportKind};
+    use plugin_registry::{PluginKind, PluginManifest, PluginTransportConfig, TransportKind};
     use serde_json::json;
     use station_schema::{FieldType, PayloadSchema};
 
@@ -205,6 +205,7 @@ mod tests {
             publishes: vec!["quantum.state".to_string()],
             capabilities: vec!["collapse_ratio".to_string()],
             capability_claims: vec![],
+            transport_config: PluginTransportConfig::default(),
         }
     }
 
