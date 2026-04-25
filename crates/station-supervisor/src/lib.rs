@@ -231,7 +231,7 @@ fn is_valid_transition(from: PluginRuntimeState, to: PluginRuntimeState) -> bool
 #[cfg(test)]
 mod tests {
     use super::*;
-    use plugin_registry::{PluginKind, PluginManifest, TransportKind};
+    use plugin_registry::{PluginKind, PluginManifest, PluginTransportConfig, TransportKind};
 
     fn manifest() -> PluginManifest {
         PluginManifest {
@@ -246,6 +246,7 @@ mod tests {
             publishes: vec!["quantum.state".to_string()],
             capabilities: vec!["collapse_ratio".to_string()],
             capability_claims: vec![],
+            transport_config: PluginTransportConfig::default(),
         }
     }
 

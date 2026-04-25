@@ -50,6 +50,9 @@ pub struct TransportConfig {
     pub endpoint: Option<String>,
     pub command: Option<String>,
     pub args: Vec<String>,
+    pub working_dir: Option<String>,
+    pub env_allowlist: Vec<String>,
+    pub timeout_ms: Option<u64>,
 }
 
 pub fn build_transport(config: &TransportConfig) -> Result<Box<dyn Transport>, TransportError> {
@@ -61,11 +64,12 @@ pub fn build_transport(config: &TransportConfig) -> Result<Box<dyn Transport>, T
             let command = config.command.clone().ok_or_else(|| {
                 TransportError::Other("subprocess transport requires command".to_string())
             })?;
-            Ok(Box::new(SubprocessTransport::new(
-                config.id.clone(),
-                command,
-                config.args.clone(),
-            )))
+            Ok(Box::new(
+                SubprocessTransport::new(config.id.clone(), command, config.args.clone())
+                    .with_working_dir(config.working_dir.clone())
+                    .with_env_allowlist(config.env_allowlist.clone())
+                    .with_shutdown_timeout_ms(config.timeout_ms),
+            ))
         }
         #[cfg(not(feature = "subprocess"))]
         TransportKind::Subprocess => Err(TransportError::Other(
@@ -87,6 +91,12 @@ pub trait Transport {
     fn start(&mut self) -> Result<(), TransportError>;
     fn stop(&mut self) -> Result<(), TransportError>;
     fn send(&mut self, event: &EventEnvelope) -> Result<(), TransportError>;
+    fn drain_candidate_events(&mut self) -> Vec<EventEnvelope> {
+        Vec::new()
+    }
+    fn drain_evidence_events(&mut self) -> Vec<EventEnvelope> {
+        Vec::new()
+    }
 }
 
 #[derive(Debug)]
@@ -220,6 +230,8 @@ pub struct SubprocessTransport {
     state: TransportState,
     command: String,
     args: Vec<String>,
+    working_dir: Option<String>,
+    env_allowlist: Vec<String>,
     child: Option<Child>,
     child_stdin: Option<ChildStdin>,
     line_rx: Option<Receiver<SidecarLine>>,
@@ -244,6 +256,8 @@ impl SubprocessTransport {
             state: TransportState::Stopped,
             command: command.into(),
             args,
+            working_dir: None,
+            env_allowlist: Vec::new(),
             child: None,
             child_stdin: None,
             line_rx: None,
@@ -256,6 +270,23 @@ impl SubprocessTransport {
 
     pub fn with_shutdown_timeout(mut self, timeout: Duration) -> Self {
         self.shutdown_timeout = timeout;
+        self
+    }
+
+    pub fn with_shutdown_timeout_ms(mut self, timeout_ms: Option<u64>) -> Self {
+        if let Some(ms) = timeout_ms {
+            self.shutdown_timeout = Duration::from_millis(ms);
+        }
+        self
+    }
+
+    pub fn with_working_dir(mut self, working_dir: Option<String>) -> Self {
+        self.working_dir = working_dir;
+        self
+    }
+
+    pub fn with_env_allowlist(mut self, env_allowlist: Vec<String>) -> Self {
+        self.env_allowlist = env_allowlist;
         self
     }
 
@@ -398,6 +429,17 @@ impl Transport for SubprocessTransport {
                     .stdin(Stdio::piped())
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped());
+                if let Some(working_dir) = &self.working_dir {
+                    command.current_dir(working_dir);
+                }
+                if !self.env_allowlist.is_empty() {
+                    command.env_clear();
+                    for key in &self.env_allowlist {
+                        if let Ok(value) = std::env::var(key) {
+                            command.env(key, value);
+                        }
+                    }
+                }
                 let mut child = command
                     .spawn()
                     .map_err(|err| TransportError::Other(err.to_string()))?;
@@ -507,6 +549,14 @@ impl Transport for SubprocessTransport {
                 Ok(())
             }
         }
+    }
+
+    fn drain_candidate_events(&mut self) -> Vec<EventEnvelope> {
+        std::mem::take(&mut self.candidate_events)
+    }
+
+    fn drain_evidence_events(&mut self) -> Vec<EventEnvelope> {
+        self.take_evidence_events()
     }
 }
 
@@ -828,6 +878,9 @@ mod tests {
             endpoint: None,
             command: None,
             args: vec![],
+            working_dir: None,
+            env_allowlist: vec![],
+            timeout_ms: None,
         };
 
         let transport = build_transport(&config).expect("local transport should build");
@@ -842,6 +895,9 @@ mod tests {
             endpoint: None,
             command: None,
             args: vec![],
+            working_dir: None,
+            env_allowlist: vec![],
+            timeout_ms: None,
         };
 
         let transport = build_transport(&config).expect("null transport should build");
@@ -857,6 +913,9 @@ mod tests {
             endpoint: None,
             command: Some("/bin/cat".to_string()),
             args: vec![],
+            working_dir: None,
+            env_allowlist: vec![],
+            timeout_ms: None,
         };
 
         let result = build_transport(&config);
@@ -875,6 +934,9 @@ mod tests {
             endpoint: None,
             command: Some("/bin/cat".to_string()),
             args: vec![],
+            working_dir: None,
+            env_allowlist: vec![],
+            timeout_ms: None,
         };
 
         let transport = build_transport(&config).expect("subprocess transport should build");
@@ -889,6 +951,9 @@ mod tests {
             endpoint: None,
             command: None,
             args: vec![],
+            working_dir: None,
+            env_allowlist: vec![],
+            timeout_ms: None,
         };
         let mut transport = build_transport(&config).expect("local transport should build");
 
