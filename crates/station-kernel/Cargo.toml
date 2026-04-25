@@ -19,3 +19,4 @@ station_telemetry = { path = "../station-telemetry" }
 station_run = { path = "../station-run" }
 serde_json = "1"
 tracing = "0.1"
+thiserror = "1"

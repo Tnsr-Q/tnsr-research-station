@@ -898,6 +898,7 @@ dependencies = [
  "station_schema",
  "station_supervisor",
  "station_telemetry",
+ "thiserror",
  "tracing",
 ]
 
