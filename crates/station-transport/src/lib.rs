@@ -15,6 +15,44 @@ pub enum TransportError {
     Other(String),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransportKind {
+    Local,
+    Null,
+    Wasm,
+    WebSocket,
+    Grpc,
+    ConnectRpc,
+    Pyro5,
+    Subprocess,
+    Ffi,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransportConfig {
+    pub id: String,
+    pub kind: TransportKind,
+    pub endpoint: Option<String>,
+    pub command: Option<String>,
+    pub args: Vec<String>,
+}
+
+pub fn build_transport(config: &TransportConfig) -> Result<Box<dyn Transport>, TransportError> {
+    match config.kind {
+        TransportKind::Local => Ok(Box::new(LocalTransport::new(config.id.clone()))),
+        TransportKind::Null => Ok(Box::new(NullTransport::new(config.id.clone()))),
+        TransportKind::Wasm
+        | TransportKind::WebSocket
+        | TransportKind::Grpc
+        | TransportKind::ConnectRpc
+        | TransportKind::Pyro5
+        | TransportKind::Subprocess
+        | TransportKind::Ffi => Err(TransportError::Other(
+            "transport kind not enabled".to_string(),
+        )),
+    }
+}
+
 pub trait Transport {
     fn id(&self) -> &str;
     fn start(&mut self) -> Result<(), TransportError>;
@@ -536,6 +574,68 @@ impl Transport for FfiTransport {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn builds_local_transport_from_config() {
+        let config = TransportConfig {
+            id: "local-from-config".to_string(),
+            kind: TransportKind::Local,
+            endpoint: None,
+            command: None,
+            args: vec![],
+        };
+
+        let transport = build_transport(&config).expect("local transport should build");
+        assert_eq!(transport.id(), "local-from-config");
+    }
+
+    #[test]
+    fn builds_null_transport_from_config() {
+        let config = TransportConfig {
+            id: "null-from-config".to_string(),
+            kind: TransportKind::Null,
+            endpoint: None,
+            command: None,
+            args: vec![],
+        };
+
+        let transport = build_transport(&config).expect("null transport should build");
+        assert_eq!(transport.id(), "null-from-config");
+    }
+
+    #[test]
+    fn rejects_subprocess_transport_until_feature_enabled() {
+        let config = TransportConfig {
+            id: "subprocess-from-config".to_string(),
+            kind: TransportKind::Subprocess,
+            endpoint: None,
+            command: Some("/bin/cat".to_string()),
+            args: vec![],
+        };
+
+        let result = build_transport(&config);
+        assert!(matches!(
+            result,
+            Err(TransportError::Other(msg)) if msg == "transport kind not enabled"
+        ));
+    }
+
+    #[test]
+    fn transport_must_start_before_send() {
+        let config = TransportConfig {
+            id: "local-send-check".to_string(),
+            kind: TransportKind::Local,
+            endpoint: None,
+            command: None,
+            args: vec![],
+        };
+        let mut transport = build_transport(&config).expect("local transport should build");
+
+        let event = EventEnvelope::new("run-test", "test.topic", "test_plugin", json!({}));
+        let result = transport.send(&event);
+
+        assert!(matches!(result, Err(TransportError::NotStarted)));
+    }
 
     #[test]
     fn test_local_transport_must_start_before_send() {

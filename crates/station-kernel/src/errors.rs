@@ -6,6 +6,7 @@ use station_replay::ReplayError;
 use station_run::RunError;
 use station_schema::SchemaError;
 use station_supervisor::SupervisorError;
+use station_transport::TransportError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum KernelError {
@@ -23,6 +24,9 @@ pub enum KernelError {
 
     #[error("policy error: {0}")]
     Policy(#[from] PolicyError),
+
+    #[error("transport error: {0}")]
+    Transport(#[from] TransportError),
 
     #[error("replay error: {0}")]
     Replay(#[from] ReplayError),
