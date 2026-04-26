@@ -4,6 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use plugin_registry::load_plugin_manifest_json;
 use runtime_core::EventEnvelope;
 use serde_json::json;
 use station_kernel::KernelRuntime;
@@ -20,14 +21,40 @@ fn repo_root() -> PathBuf {
 }
 
 #[test]
-fn deterministic_echo_subprocess_round_trip_is_replayable() {
+fn producer_to_subprocess_round_trip_is_replayable_without_self_publish_input() {
     let profile_path = repo_root().join("profile/echo-subprocess.profile.json");
     let mut runtime = KernelRuntime::from_profile_path(&profile_path).expect("runtime should init");
 
     runtime
         .register_plugins()
         .expect("plugin manifest should register");
+    let producer_manifest =
+        load_plugin_manifest_json(repo_root().join("plugins/echo-producer.plugin.json"))
+            .expect("producer manifest should load");
+    assert!(producer_manifest
+        .publishes
+        .iter()
+        .any(|topic| topic == "echo.input"));
+
+    let subprocess_manifest =
+        load_plugin_manifest_json(repo_root().join("plugins/echo-subprocess.plugin.json"))
+            .expect("subprocess manifest should load");
+    assert!(subprocess_manifest
+        .subscribes
+        .iter()
+        .any(|topic| topic == "echo.input"));
+    assert!(subprocess_manifest
+        .publishes
+        .iter()
+        .any(|topic| topic == "echo.output"));
+    assert!(subprocess_manifest
+        .publishes
+        .iter()
+        .all(|topic| topic != "echo.input"));
     runtime.register_schemas().expect("schemas should register");
+    runtime
+        .start_plugin("echo_producer")
+        .expect("producer plugin should start");
     runtime
         .start_plugin("echo_subprocess")
         .expect("subprocess plugin should start");
@@ -35,13 +62,16 @@ fn deterministic_echo_subprocess_round_trip_is_replayable() {
     let input_event = EventEnvelope::new(
         runtime.run_id(),
         "echo.input",
-        "echo_subprocess",
+        "echo_producer",
         json!({"message": "deterministic-sidecar"}),
     );
     let admitted_input = runtime
         .admit(input_event)
         .expect("policy decision should be recorded")
         .expect("input event should be policy admitted");
+    runtime
+        .publish_admitted(admitted_input.clone())
+        .expect("admitted producer input should publish");
 
     runtime
         .send_to_plugin("echo_subprocess", &admitted_input)
@@ -72,6 +102,9 @@ fn deterministic_echo_subprocess_round_trip_is_replayable() {
     runtime
         .stop_plugin("echo_subprocess")
         .expect("subprocess plugin should stop");
+    runtime
+        .stop_plugin("echo_producer")
+        .expect("producer plugin should stop");
 
     let run_dir = runtime.run_dir().to_path_buf();
     let events_path = run_dir.join("events.jsonl");
@@ -149,6 +182,15 @@ fn deterministic_echo_subprocess_round_trip_is_replayable() {
             && event.source == "echo_subprocess"
             && event.payload["message"] == "deterministic-sidecar"
     }));
+
+    assert!(events.iter().any(|event| {
+        event.topic == "echo.input"
+            && event.source == "echo_producer"
+            && event.payload["message"] == "deterministic-sidecar"
+    }));
+    assert!(events
+        .iter()
+        .all(|event| !(event.topic == "echo.input" && event.source == "echo_subprocess")));
 
     let _ = fs::remove_dir_all(run_dir);
 }
