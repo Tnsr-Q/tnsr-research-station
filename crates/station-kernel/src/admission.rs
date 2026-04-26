@@ -37,6 +37,10 @@ impl AdmittedEvent {
         &self.event.source
     }
 
+    pub fn trace_id(&self) -> &str {
+        &self.event.trace_id
+    }
+
     pub(crate) fn to_envelope_with_policy_event_id(&self) -> EventEnvelope {
         let mut event = self.event.clone();
         event.policy_event_id = Some(self.policy_event_id.clone());
