@@ -771,31 +771,20 @@ cargo run -p station_kernel
 
 ## Roadmap
 
-### Next: deterministic subprocess sidecar fixture
+### Recently completed
 
-Add a small fixture sidecar and end-to-end test:
+Deterministic subprocess fixture coverage is now present in-repo:
 
 ```text
 fixtures/sidecars/echo_jsonl.py
 plugins/echo-subprocess.plugin.json
 schemas/echo-input.schema.json
 schemas/echo-output.schema.json
-profiles/echo-subprocess.profile.json
+profile/echo-subprocess.profile.json
+crates/station-kernel/tests/echo_subprocess_integration.rs
 ```
 
-Acceptance target:
-
-```text
-kernel starts subprocess from manifest
-kernel sends admitted input event
-sidecar emits candidate output event
-kernel policy-admits candidate
-kernel publishes admitted output
-replay verifies
-manifest seals
-```
-
-### After that
+### Next
 
 - persistent artifact ledger on disk
 - first real scientific subprocess adapter
