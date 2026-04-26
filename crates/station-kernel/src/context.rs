@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use artifact_ledger::ArtifactLedger;
 use plugin_registry::{load_plugin_manifest_json, PluginRegistry};
-use runtime_core::EventBus;
+use runtime_core::{EventBus, EventEnvelope};
 use station_replay::JsonlReplayLog;
 use station_run::{load_run_profile_json, RunProfile};
 use station_schema::{load_schema_json, SchemaRegistry};
@@ -27,6 +27,7 @@ pub struct KernelContext {
     pub supervisor: StationSupervisor,
     pub replay: JsonlReplayLog,
     pub transports: HashMap<String, Box<dyn Transport>>,
+    pub last_sent_by_plugin: HashMap<String, EventEnvelope>,
 }
 
 impl KernelContext {
@@ -58,6 +59,7 @@ impl KernelContext {
             supervisor,
             replay: JsonlReplayLog::open(events_path)?,
             transports: HashMap::new(),
+            last_sent_by_plugin: HashMap::new(),
         })
     }
 
