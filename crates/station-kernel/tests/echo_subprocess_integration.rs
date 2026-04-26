@@ -91,6 +91,45 @@ fn deterministic_echo_subprocess_round_trip_is_replayable() {
     assert!(manifest.last_record_hash.is_some());
 
     let events = JsonlReplayLog::read_all_events(events_path).expect("events should be readable");
+    let send_attempted = events
+        .iter()
+        .find(|event| event.topic == "transport.runtime.send_attempted")
+        .expect("send attempted evidence should be present");
+    assert_eq!(send_attempted.payload["event_id"], admitted_input.event_id());
+    assert_eq!(send_attempted.payload["topic"], admitted_input.topic());
+    assert_eq!(send_attempted.payload["source"], admitted_input.source());
+    assert_eq!(send_attempted.payload["plugin_id"], "echo_subprocess");
+    assert_eq!(send_attempted.payload["transport_id"], "plugin:echo_subprocess");
+    assert_eq!(send_attempted.payload["trace_id"], admitted_input.trace_id());
+    assert_eq!(
+        send_attempted.payload["policy_event_id"],
+        admitted_input.policy_event_id()
+    );
+
+    let send_succeeded = events
+        .iter()
+        .find(|event| event.topic == "transport.runtime.send_succeeded")
+        .expect("send succeeded evidence should be present");
+    assert_eq!(send_succeeded.payload, send_attempted.payload);
+
+    let echoed_event = events
+        .iter()
+        .find(|event| {
+            event.topic == "echo.output"
+                && event.source == "echo_subprocess"
+                && event.payload["message"] == "deterministic-sidecar"
+        })
+        .expect("echo output event should be present in replay");
+    assert_eq!(
+        echoed_event.trace_id,
+        admitted_input.trace_id(),
+        "echo output should preserve input trace for causality"
+    );
+    assert_eq!(
+        echoed_event.trace_id, send_attempted.payload["trace_id"],
+        "echo output trace should match send evidence trace for replay causality"
+    );
+
     assert!(events.iter().any(|event| {
         event.topic == "policy.event.admitted"
             && event.payload["topic"] == "echo.output"

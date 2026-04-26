@@ -251,17 +251,43 @@ impl KernelRuntime {
             self.record_transport_failed(plugin_id, "send", &transport_id, reason)?;
             return Err(KernelError::Transport(TransportError::NotStarted));
         }
-        let transport = self
+        let transport_id = self
             .context
             .transports
-            .get_mut(plugin_id)
-            .expect("transport existence checked");
-        let transport_id = transport.id().to_string();
+            .get(plugin_id)
+            .expect("transport existence checked")
+            .id()
+            .to_string();
         let event = admitted.to_envelope_with_policy_event_id();
-        if let Err(err) = transport.send(&event) {
+
+        self.record_transport_send_evidence(
+            "transport.runtime.send_attempted",
+            plugin_id,
+            &transport_id,
+            &event,
+            admitted.policy_event_id(),
+        )?;
+
+        let send_result = {
+            let transport = self
+                .context
+                .transports
+                .get_mut(plugin_id)
+                .expect("transport existence checked");
+            transport.send(&event)
+        };
+        if let Err(err) = send_result {
             self.record_transport_failed(plugin_id, "send", &transport_id, err.to_string())?;
             return Err(KernelError::Transport(err));
         }
+
+        self.record_transport_send_evidence(
+            "transport.runtime.send_succeeded",
+            plugin_id,
+            &transport_id,
+            &event,
+            admitted.policy_event_id(),
+        )?;
 
         Ok(())
     }
@@ -361,6 +387,32 @@ impl KernelRuntime {
                 "stage": stage,
                 "transport_id": transport_id,
                 "reason": reason.into(),
+            }),
+        );
+        self.context.replay.append_record(&evidence)?;
+        Ok(())
+    }
+
+    fn record_transport_send_evidence(
+        &mut self,
+        topic: &str,
+        plugin_id: &str,
+        transport_id: &str,
+        event: &EventEnvelope,
+        policy_event_id: &str,
+    ) -> Result<(), KernelError> {
+        let evidence = EventEnvelope::new(
+            self.run_id(),
+            topic,
+            "station_kernel",
+            json!({
+                "event_id": event.event_id,
+                "topic": event.topic,
+                "source": event.source,
+                "plugin_id": plugin_id,
+                "transport_id": transport_id,
+                "trace_id": event.trace_id,
+                "policy_event_id": policy_event_id,
             }),
         );
         self.context.replay.append_record(&evidence)?;
