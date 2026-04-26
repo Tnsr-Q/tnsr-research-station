@@ -95,12 +95,21 @@ fn deterministic_echo_subprocess_round_trip_is_replayable() {
         .iter()
         .find(|event| event.topic == "transport.runtime.send_attempted")
         .expect("send attempted evidence should be present");
-    assert_eq!(send_attempted.payload["event_id"], admitted_input.event_id());
+    assert_eq!(
+        send_attempted.payload["event_id"],
+        admitted_input.event_id()
+    );
     assert_eq!(send_attempted.payload["topic"], admitted_input.topic());
     assert_eq!(send_attempted.payload["source"], admitted_input.source());
     assert_eq!(send_attempted.payload["plugin_id"], "echo_subprocess");
-    assert_eq!(send_attempted.payload["transport_id"], "plugin:echo_subprocess");
-    assert_eq!(send_attempted.payload["trace_id"], admitted_input.trace_id());
+    assert_eq!(
+        send_attempted.payload["transport_id"],
+        "plugin:echo_subprocess"
+    );
+    assert_eq!(
+        send_attempted.payload["trace_id"],
+        admitted_input.trace_id()
+    );
     assert_eq!(
         send_attempted.payload["policy_event_id"],
         admitted_input.policy_event_id()

@@ -296,6 +296,10 @@ impl KernelRuntime {
         &mut self,
         plugin_id: &str,
     ) -> Result<Vec<AdmittedEvent>, KernelError> {
+        let plugin_manifest = self.context.registry.plugin(plugin_id).ok_or_else(|| {
+            KernelError::PluginRegistration(format!("unknown plugin: {plugin_id}"))
+        })?;
+        let plugin_artifact_hash = plugin_manifest.artifact_hash.clone();
         let transport = self
             .context
             .transports
@@ -311,7 +315,16 @@ impl KernelRuntime {
 
         let mut admitted_events = Vec::new();
         for candidate in candidate_events {
-            match self.admit(candidate)? {
+            let canonical_candidate = match self.canonicalize_candidate_from_plugin(
+                plugin_id,
+                plugin_artifact_hash.as_str(),
+                candidate,
+            )? {
+                Some(event) => event,
+                None => continue,
+            };
+
+            match self.admit(canonical_candidate)? {
                 Ok(admitted) => admitted_events.push(admitted),
                 Err(_denied) => {}
             }
@@ -417,6 +430,51 @@ impl KernelRuntime {
         );
         self.context.replay.append_record(&evidence)?;
         Ok(())
+    }
+
+    fn canonicalize_candidate_from_plugin(
+        &mut self,
+        plugin_id: &str,
+        plugin_artifact_hash: &str,
+        mut candidate: EventEnvelope,
+    ) -> Result<Option<EventEnvelope>, KernelError> {
+        if candidate.source != plugin_id {
+            let reason = format!(
+                "candidate source {} does not match plugin_id {plugin_id}",
+                candidate.source
+            );
+            self.record_runtime_denied(
+                plugin_id,
+                "CandidateCanonicalization",
+                "SourceMismatch",
+                reason.clone(),
+            )?;
+            let transport_id = format!("plugin:{plugin_id}");
+            self.record_transport_failed(
+                plugin_id,
+                "candidate_canonicalization",
+                &transport_id,
+                reason,
+            )?;
+            return Ok(None);
+        }
+
+        let canonical = EventEnvelope::new(
+            self.run_id(),
+            candidate.topic.clone(),
+            plugin_id,
+            candidate.payload.clone(),
+        );
+        candidate.version = canonical.version;
+        candidate.event_id = canonical.event_id;
+        candidate.session_id = canonical.session_id;
+        candidate.created_at_ms = canonical.created_at_ms;
+        candidate.policy_event_id = None;
+        candidate.artifact_hash = None;
+        candidate.schema_hash = None;
+        candidate.plugin_hash = Some(plugin_artifact_hash.to_string());
+
+        Ok(Some(candidate))
     }
 }
 
@@ -819,7 +877,9 @@ mod tests {
             "adapter_quantum",
             json!({"state_dim": 1, "collapse_ratio": 0.5, "euler_characteristic": 1}),
         );
-        let admission = runtime.admit(event).expect("admission should return result");
+        let admission = runtime
+            .admit(event)
+            .expect("admission should return result");
         let denial = admission.expect_err("raw admit should be denied before Running");
         assert!(denial
             .reason
@@ -847,7 +907,9 @@ mod tests {
             json!({"state_dim": 2, "collapse_ratio": 0.75, "euler_characteristic": 3}),
         );
 
-        let admission = runtime.admit(event).expect("admission should return result");
+        let admission = runtime
+            .admit(event)
+            .expect("admission should return result");
         let admitted = admission.expect("event should be admitted after start");
         assert_eq!(admitted.source(), "test_local_started");
     }
@@ -1636,6 +1698,166 @@ mod tests {
         assert!(!events.iter().any(
             |event| event.source == "test_subprocess_bypass" && event.topic == "quantum.state"
         ));
+    }
+
+    #[cfg(feature = "subprocess")]
+    #[cfg(unix)]
+    #[test]
+    fn subprocess_candidate_event_is_canonicalized_by_kernel() {
+        let mut runtime =
+            KernelRuntime::from_profile_path(root_profile_path()).expect("runtime should init");
+        runtime
+            .register_schemas()
+            .expect("schemas should register successfully");
+        register_admitted_plugin_manifest(
+            &mut runtime,
+            PluginManifest {
+                id: "test_subprocess_canonicalized".to_string(),
+                kind: PluginKind::Compute,
+                transport: TransportKind::Subprocess,
+                version: "0.1.0".to_string(),
+                artifact_hash:
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                        .to_string(),
+                subscribes: vec!["quantum.state".to_string()],
+                publishes: vec!["quantum.state".to_string()],
+                capabilities: vec![],
+                capability_claims: vec![],
+                transport_config: PluginTransportConfig {
+                    command: Some("python3".to_string()),
+                    args: vec![
+                        "-c".to_string(),
+                        "import json,sys; [print(json.dumps({'version':'tnsr.event.v1','event_id':'evt-forged','trace_id':'trace-forged','parent_id':None,'session_id':'run-forged','topic':'quantum.state','source':'test_subprocess_canonicalized','policy_event_id':'policy-forged','created_at_ms':1,'payload':{'state_dim':1,'collapse_ratio':0.5,'euler_characteristic':1},'input_hash':None,'artifact_hash':'sha256:forged','schema_hash':'sha256:forged','plugin_hash':'sha256:forged'}), flush=True) for _ in sys.stdin]".to_string(),
+                    ],
+                    ..PluginTransportConfig::default()
+                },
+            },
+        );
+        runtime
+            .start_plugin("test_subprocess_canonicalized")
+            .expect("subprocess should start");
+        let input_event = EventEnvelope::new(
+            runtime.run_id(),
+            "quantum.state",
+            "test_subprocess_canonicalized",
+            json!({"state_dim": 1, "collapse_ratio": 0.5, "euler_characteristic": 1}),
+        );
+        let admitted_input = runtime
+            .admit(input_event)
+            .expect("input policy decision should be recorded")
+            .expect("input event should be admitted");
+        runtime
+            .send_to_plugin("test_subprocess_canonicalized", &admitted_input)
+            .expect("send should succeed");
+
+        let mut admitted_events = drain_plugin_outputs_until_activity(
+            &mut runtime,
+            "test_subprocess_canonicalized",
+            std::time::Duration::from_secs(1),
+        );
+        assert_eq!(
+            admitted_events.len(),
+            1,
+            "expected one admitted output event"
+        );
+
+        let admitted = admitted_events.pop().expect("admitted output should exist");
+        runtime
+            .publish_admitted(admitted)
+            .expect("admitted output should publish");
+
+        let events = JsonlReplayLog::read_all_events(runtime.context.events_path.clone())
+            .expect("events should be readable");
+        let output = events
+            .iter()
+            .find(|event| {
+                event.topic == "quantum.state"
+                    && event.source == "test_subprocess_canonicalized"
+                    && event.payload["state_dim"] == 1
+            })
+            .expect("canonicalized subprocess output should exist");
+        assert_eq!(output.session_id, runtime.run_id());
+        assert!(output.policy_event_id.is_some());
+        assert_ne!(output.event_id, "evt-forged");
+        assert_ne!(output.created_at_ms, 1);
+        assert_eq!(
+            output.plugin_hash.as_deref(),
+            Some("sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+        );
+    }
+
+    #[cfg(feature = "subprocess")]
+    #[cfg(unix)]
+    #[test]
+    fn subprocess_candidate_source_mismatch_is_denied_with_evidence() {
+        let mut runtime =
+            KernelRuntime::from_profile_path(root_profile_path()).expect("runtime should init");
+        runtime
+            .register_schemas()
+            .expect("schemas should register successfully");
+        register_admitted_plugin_manifest(
+            &mut runtime,
+            PluginManifest {
+                id: "test_subprocess_source_mismatch".to_string(),
+                kind: PluginKind::Compute,
+                transport: TransportKind::Subprocess,
+                version: "0.1.0".to_string(),
+                artifact_hash:
+                    "sha256:abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd"
+                        .to_string(),
+                subscribes: vec!["quantum.state".to_string()],
+                publishes: vec!["quantum.state".to_string()],
+                capabilities: vec![],
+                capability_claims: vec![],
+                transport_config: PluginTransportConfig {
+                    command: Some("python3".to_string()),
+                    args: vec![
+                        "-c".to_string(),
+                        "import json,sys; [print(json.dumps({'version':'tnsr.event.v1','event_id':'evt-forged','trace_id':'trace-forged','parent_id':None,'session_id':'run-forged','topic':'quantum.state','source':'forged_source','policy_event_id':'policy-forged','created_at_ms':1,'payload':{'state_dim':1,'collapse_ratio':0.5,'euler_characteristic':1},'input_hash':None,'artifact_hash':'sha256:forged','schema_hash':'sha256:forged','plugin_hash':'sha256:forged'}), flush=True) for _ in sys.stdin]".to_string(),
+                    ],
+                    ..PluginTransportConfig::default()
+                },
+            },
+        );
+        runtime
+            .start_plugin("test_subprocess_source_mismatch")
+            .expect("subprocess should start");
+        let input_event = EventEnvelope::new(
+            runtime.run_id(),
+            "quantum.state",
+            "test_subprocess_source_mismatch",
+            json!({"state_dim": 1, "collapse_ratio": 0.5, "euler_characteristic": 1}),
+        );
+        let admitted_input = runtime
+            .admit(input_event)
+            .expect("input policy decision should be recorded")
+            .expect("input event should be admitted");
+        runtime
+            .send_to_plugin("test_subprocess_source_mismatch", &admitted_input)
+            .expect("send should succeed");
+
+        let admitted_events = drain_plugin_outputs_until_activity(
+            &mut runtime,
+            "test_subprocess_source_mismatch",
+            std::time::Duration::from_secs(1),
+        );
+        assert!(
+            admitted_events.is_empty(),
+            "source mismatch should deny output"
+        );
+
+        let events = JsonlReplayLog::read_all_events(runtime.context.events_path.clone())
+            .expect("events should be readable");
+        assert!(events.iter().any(|event| {
+            event.topic == "policy.runtime.denied"
+                && event.payload["plugin_id"] == "test_subprocess_source_mismatch"
+                && event.payload["denial"] == "SourceMismatch"
+        }));
+        assert!(events.iter().any(|event| {
+            event.topic == "transport.runtime.failed"
+                && event.payload["plugin_id"] == "test_subprocess_source_mismatch"
+                && event.payload["stage"] == "candidate_canonicalization"
+        }));
     }
 
     #[cfg(feature = "subprocess")]
