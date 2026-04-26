@@ -203,6 +203,11 @@ impl KernelRuntime {
             let transport_id = transport.id().to_string();
             if let Err(err) = transport.stop() {
                 self.record_transport_failed(plugin_id, "stop", &transport_id, err.to_string())?;
+                let failed_transition = self
+                    .context
+                    .supervisor
+                    .transition(plugin_id, PluginRuntimeState::Failed)?;
+                self.context.replay.append_record(&failed_transition)?;
                 return Err(KernelError::Transport(err));
             }
             let evidence_events = transport.drain_evidence_events();
@@ -586,12 +591,42 @@ mod tests {
     use plugin_registry::{
         CapabilityClaim, PluginKind, PluginManifest, PluginTransportConfig, TransportKind,
     };
+    use runtime_core::EventEnvelope;
     use station_replay::JsonlReplayLog;
     use station_run::RunStatus;
+    use station_transport::{Transport, TransportError};
 
     use super::*;
 
     struct RunDirCleanup(PathBuf);
+
+    struct StopFailTransport {
+        id: String,
+    }
+
+    impl StopFailTransport {
+        fn new(id: impl Into<String>) -> Self {
+            Self { id: id.into() }
+        }
+    }
+
+    impl Transport for StopFailTransport {
+        fn id(&self) -> &str {
+            &self.id
+        }
+
+        fn start(&mut self) -> Result<(), TransportError> {
+            Ok(())
+        }
+
+        fn stop(&mut self) -> Result<(), TransportError> {
+            Err(TransportError::Other("simulated stop failure".to_string()))
+        }
+
+        fn send(&mut self, _event: &EventEnvelope) -> Result<(), TransportError> {
+            Ok(())
+        }
+    }
 
     impl RunDirCleanup {
         fn track(runtime: &KernelRuntime) -> Self {
@@ -1044,6 +1079,51 @@ mod tests {
             .expect("stopped transition should be present");
         assert!(stopping_index < stopped_index);
         assert!(!runtime.context.transports.contains_key("test_local_order"));
+
+        let _ = fs::remove_dir_all(runtime.run_dir());
+    }
+
+    #[test]
+    fn stop_plugin_failure_transitions_plugin_to_failed() {
+        let mut runtime =
+            KernelRuntime::from_profile_path(root_profile_path()).expect("runtime should init");
+        register_admitted_plugin(&mut runtime, "test_stop_failure", TransportKind::Local);
+        runtime
+            .start_plugin("test_stop_failure")
+            .expect("plugin should start");
+        runtime.context.transports.insert(
+            "test_stop_failure".to_string(),
+            Box::new(StopFailTransport::new("plugin:test_stop_failure")),
+        );
+
+        let result = runtime.stop_plugin("test_stop_failure");
+        assert!(matches!(result, Err(KernelError::Transport(_))));
+        assert_eq!(
+            runtime.context.supervisor.state_of("test_stop_failure"),
+            Some(PluginRuntimeState::Failed)
+        );
+
+        let events = JsonlReplayLog::read_all_events(runtime.context.events_path.clone())
+            .expect("events should be readable");
+        assert!(events.iter().any(|event| {
+            event.topic == "transport.runtime.failed"
+                && event.payload["plugin_id"] == "test_stop_failure"
+                && event.payload["stage"] == "stop"
+        }));
+        assert!(events.iter().any(|event| {
+            event.topic == "supervisor.plugin.transition"
+                && event.payload["plugin_id"] == "test_stop_failure"
+                && event.payload["from"] == "Stopping"
+                && event.payload["to"] == "Failed"
+        }));
+        assert!(
+            !events.iter().any(|event| {
+                event.topic == "supervisor.plugin.transition"
+                    && event.payload["plugin_id"] == "test_stop_failure"
+                    && event.payload["to"] == "Stopped"
+            }),
+            "failed stop should not transition to Stopped"
+        );
 
         let _ = fs::remove_dir_all(runtime.run_dir());
     }

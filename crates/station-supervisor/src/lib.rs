@@ -221,6 +221,8 @@ fn is_valid_transition(from: PluginRuntimeState, to: PluginRuntimeState) -> bool
             | (Starting, Running)
             | (Running, Stopping)
             | (Stopping, Stopped)
+            | (Stopping, Failed)
+            | (Stopping, Quarantined)
             | (Starting, Failed)
             | (Running, Failed)
             | (Failed, Quarantined)
@@ -287,6 +289,37 @@ mod tests {
         let result = supervisor.transition("adapter_quantum", PluginRuntimeState::Running);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn allows_stopping_to_failed_transition() {
+        let mut supervisor = StationSupervisor::new("default");
+        let manifest = manifest();
+
+        supervisor
+            .register_plugin(&manifest)
+            .expect("register plugin");
+        supervisor
+            .transition("adapter_quantum", PluginRuntimeState::Admitted)
+            .expect("admit plugin");
+        supervisor
+            .transition("adapter_quantum", PluginRuntimeState::Starting)
+            .expect("start plugin");
+        supervisor
+            .transition("adapter_quantum", PluginRuntimeState::Running)
+            .expect("running plugin");
+        supervisor
+            .transition("adapter_quantum", PluginRuntimeState::Stopping)
+            .expect("stopping plugin");
+
+        supervisor
+            .transition("adapter_quantum", PluginRuntimeState::Failed)
+            .expect("stopping to failed should be allowed");
+
+        assert_eq!(
+            supervisor.state_of("adapter_quantum"),
+            Some(PluginRuntimeState::Failed)
+        );
     }
 
     #[test]
