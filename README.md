@@ -248,6 +248,8 @@ Subprocess-capable plugin manifests may include:
   "transport_config": {
     "command": "python3",
     "args": ["fixtures/sidecars/echo_jsonl.py"],
+    "sidecar_executable_hash": "sha256:<command-bytes>",
+    "sidecar_args_hash": "sha256:<canonical-args-payload>",
     "working_dir": ".",
     "env_allowlist": [],
     "inherit_env": false,
@@ -374,7 +376,7 @@ For plugin-originating events, policy checks:
 5. schema hash is attached
 6. payload validates against schema
 
-Transport-backed plugins must be `Running` before publishing. Local plugins may publish when `Admitted` or `Running`.
+All plugins must be `Running` before publishing.
 
 Policy emits:
 
@@ -491,6 +493,8 @@ With `--features subprocess`, subprocess transport:
 - supports explicit `inherit_env`
 - supports explicit `env_allowlist`
 - supports bounded `working_dir`
+- validates `sidecar_executable_hash` against resolved command bytes
+- validates `sidecar_args_hash` against canonical args payload and local file hashes
 
 ---
 
@@ -710,6 +714,8 @@ A subprocess plugin manifest must provide a command when the subprocess feature 
   "transport_config": {
     "command": "python3",
     "args": ["fixtures/sidecars/echo_jsonl.py"],
+    "sidecar_executable_hash": "sha256:<command-bytes>",
+    "sidecar_args_hash": "sha256:<canonical-args-payload>",
     "working_dir": ".",
     "env_allowlist": [],
     "inherit_env": false,
@@ -788,7 +794,7 @@ crates/station-kernel/tests/echo_subprocess_integration.rs
 
 - persistent artifact ledger on disk
 - first real scientific subprocess adapter
-- explicit executable allowlist or signed sidecar manifest
+- explicit executable allowlist beyond hash pinning
 - stronger system-event schema policy
 - real WebSocket transport behind feature flag
 - real gRPC/ConnectRPC transport behind feature flag
