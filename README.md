@@ -495,6 +495,7 @@ With `--features subprocess`, subprocess transport:
 - supports bounded `working_dir`
 - validates `sidecar_executable_hash` against resolved command bytes
 - validates `sidecar_args_hash` against canonical args payload and local file hashes
+- computes canonical args payload from manifest-provided args (normalized separators + optional file bytes hash) so hashes are checkout-path independent for relative args
 
 ---
 
