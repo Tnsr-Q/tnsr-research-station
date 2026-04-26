@@ -30,6 +30,7 @@ for raw in sys.stdin:
     output["payload"] = {
         "message": message,
         "echoed": True,
+        "request_event_id": envelope.get("event_id"),
     }
     output["schema_hash"] = None
 
