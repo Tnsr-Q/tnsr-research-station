@@ -17,6 +17,7 @@ pub fn run_from_env() -> Result<(), KernelError> {
     let mut runtime = KernelRuntime::from_profile_path(profile_path)?;
     runtime.register_plugins()?;
     runtime.register_schemas()?;
+    runtime.start_plugin("adapter_quantum")?;
 
     let event = quantum_state_event(runtime.run_id());
     let admitted = match runtime.admit(event)? {

@@ -67,7 +67,7 @@ impl<'a> PolicyEngine<'a> {
     ///
     /// 1. Source plugin must be registered
     /// 2. Source plugin must be authorized to publish the topic
-    /// 3. Source plugin must be in an admitted or running state
+    /// 3. Source plugin must be in Running state
     /// 4. Schema must exist for the topic
     /// 5. Schema hash must be attached (auto-attached if missing)
     /// 6. Payload must validate against the schema
@@ -135,10 +135,8 @@ impl<'a> PolicyEngine<'a> {
         };
 
         let is_publishable_state = match plugin.transport {
-            TransportKind::Local => {
-                state == PluginRuntimeState::Admitted || state == PluginRuntimeState::Running
-            }
-            TransportKind::Subprocess
+            TransportKind::Local
+            | TransportKind::Subprocess
             | TransportKind::WebSocket
             | TransportKind::Grpc
             | TransportKind::ConnectRpc
@@ -233,6 +231,12 @@ mod tests {
         supervisor
             .transition(&manifest.id, PluginRuntimeState::Admitted)
             .expect("admit plugin");
+        supervisor
+            .transition(&manifest.id, PluginRuntimeState::Starting)
+            .expect("start transition");
+        supervisor
+            .transition(&manifest.id, PluginRuntimeState::Running)
+            .expect("running transition");
 
         let mut schemas = SchemaRegistry::default();
         schemas.register(schema()).expect("register schema");
@@ -293,6 +297,52 @@ mod tests {
             supervisor.session.run_id.clone(),
             "quantum.state",
             "adapter_subprocess",
+            json!({
+                "state_dim": 16,
+                "collapse_ratio": 0.42,
+                "euler_characteristic": 8
+            }),
+        );
+
+        let admission = PolicyEngine {
+            plugins: &registry,
+            schemas: &schemas,
+            supervisor: &supervisor,
+        }
+        .admit_event(&mut event)
+        .expect("admission should not error");
+
+        assert!(!admission.allowed);
+        assert!(admission
+            .reason
+            .expect("denial reason")
+            .contains("not in publishable state"));
+    }
+
+    #[test]
+    fn local_plugins_require_running_state_for_publish() {
+        let manifest = manifest();
+
+        let mut registry = PluginRegistry::default();
+        registry
+            .register(manifest.clone())
+            .expect("register plugin");
+
+        let mut supervisor = StationSupervisor::new("default");
+        supervisor
+            .register_plugin(&manifest)
+            .expect("supervisor register plugin");
+        supervisor
+            .transition(&manifest.id, PluginRuntimeState::Admitted)
+            .expect("admit plugin");
+
+        let mut schemas = SchemaRegistry::default();
+        schemas.register(schema()).expect("register schema");
+
+        let mut event = EventEnvelope::new(
+            supervisor.session.run_id.clone(),
+            "quantum.state",
+            "adapter_quantum",
             json!({
                 "state_dim": 16,
                 "collapse_ratio": 0.42,

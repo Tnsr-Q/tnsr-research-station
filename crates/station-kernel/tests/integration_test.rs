@@ -93,6 +93,20 @@ fn end_to_end_kernel_run_produces_valid_manifest() {
         replay
             .append_record(&admitted_event)
             .expect("Failed to append admitted event");
+
+        let starting_event = supervisor
+            .transition(&manifest.id, PluginRuntimeState::Starting)
+            .expect("Failed to transition plugin to starting");
+        replay
+            .append_record(&starting_event)
+            .expect("Failed to append starting event");
+
+        let running_event = supervisor
+            .transition(&manifest.id, PluginRuntimeState::Running)
+            .expect("Failed to transition plugin to running");
+        replay
+            .append_record(&running_event)
+            .expect("Failed to append running event");
     }
 
     // 7. Load and register schemas

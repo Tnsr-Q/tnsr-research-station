@@ -473,7 +473,9 @@ mod tests {
     use std::path::PathBuf;
 
     use adapter_quantum::quantum_state_event;
-    use plugin_registry::{PluginKind, PluginManifest, PluginTransportConfig, TransportKind};
+    use plugin_registry::{
+        CapabilityClaim, PluginKind, PluginManifest, PluginTransportConfig, TransportKind,
+    };
     use station_replay::JsonlReplayLog;
     use station_run::RunStatus;
 
@@ -675,6 +677,9 @@ mod tests {
         runtime
             .register_schemas()
             .expect("schemas should register successfully");
+        runtime
+            .start_plugin("adapter_quantum")
+            .expect("adapter_quantum should start");
     }
 
     #[test]
@@ -698,6 +703,101 @@ mod tests {
 
         assert_eq!(manifest.status, RunStatus::Failed);
         assert!(manifest.failure_reason.is_some());
+    }
+
+    #[test]
+    fn raw_admit_denied_for_local_plugin_with_gpu_claim_before_start() {
+        let mut runtime =
+            KernelRuntime::from_profile_path(root_profile_path()).expect("runtime should init");
+        runtime
+            .register_schemas()
+            .expect("schemas should register successfully");
+
+        let manifest = PluginManifest {
+            id: "adapter_quantum".to_string(),
+            kind: PluginKind::Compute,
+            transport: TransportKind::Local,
+            version: "0.1.0".to_string(),
+            artifact_hash:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                    .to_string(),
+            subscribes: vec!["quantum.analyze".to_string()],
+            publishes: vec!["quantum.state".to_string()],
+            capabilities: vec!["simulation.hypergrid".to_string()],
+            capability_claims: vec![CapabilityClaim {
+                name: "simulation.hypergrid".to_string(),
+                enabled: true,
+                deterministic: true,
+                replay_safe: true,
+                requires_gpu: true,
+                ..CapabilityClaim::default()
+            }],
+            transport_config: PluginTransportConfig::default(),
+        };
+
+        runtime
+            .context
+            .registry
+            .register(manifest.clone())
+            .expect("register plugin");
+        let registered_event = runtime
+            .context
+            .supervisor
+            .register_plugin(&manifest)
+            .expect("register plugin with supervisor");
+        runtime
+            .context
+            .replay
+            .append_record(&registered_event)
+            .expect("append registered event");
+        let admitted_event = runtime
+            .context
+            .supervisor
+            .transition(&manifest.id, PluginRuntimeState::Admitted)
+            .expect("admit plugin");
+        runtime
+            .context
+            .replay
+            .append_record(&admitted_event)
+            .expect("append admitted event");
+
+        let event = EventEnvelope::new(
+            runtime.run_id(),
+            "quantum.state",
+            "adapter_quantum",
+            json!({"state_dim": 1, "collapse_ratio": 0.5, "euler_characteristic": 1}),
+        );
+        let admission = runtime.admit(event).expect("admission should return result");
+        let denial = admission.expect_err("raw admit should be denied before Running");
+        assert!(denial
+            .reason
+            .expect("denial reason should exist")
+            .contains("not in publishable state"));
+    }
+
+    #[test]
+    fn local_plugin_event_admitted_after_permitted_start() {
+        let mut runtime =
+            KernelRuntime::from_profile_path(root_profile_path()).expect("runtime should init");
+        runtime
+            .register_schemas()
+            .expect("schemas should register successfully");
+        register_admitted_plugin(&mut runtime, "test_local_started", TransportKind::Local);
+
+        runtime
+            .start_plugin("test_local_started")
+            .expect("plugin should start with default permissions");
+
+        let event = EventEnvelope::new(
+            runtime.run_id(),
+            "quantum.state",
+            "test_local_started",
+            json!({"state_dim": 2, "collapse_ratio": 0.75, "euler_characteristic": 3}),
+        );
+
+        let admission = runtime.admit(event).expect("admission should return result");
+        let admitted = admission.expect("event should be admitted after start");
+        assert_eq!(admitted.source(), "test_local_started");
     }
 
     #[test]
@@ -1111,6 +1211,9 @@ mod tests {
         runtime
             .register_schemas()
             .expect("schemas should register successfully");
+        runtime
+            .start_plugin("adapter_quantum")
+            .expect("adapter_quantum should start");
 
         let event = quantum_state_event(runtime.run_id());
         let admitted = runtime
@@ -1136,6 +1239,9 @@ mod tests {
         runtime
             .register_schemas()
             .expect("schemas should register successfully");
+        runtime
+            .start_plugin("adapter_quantum")
+            .expect("adapter_quantum should start");
 
         let event = quantum_state_event(runtime.run_id());
         let admitted = runtime
