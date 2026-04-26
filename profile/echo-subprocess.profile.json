@@ -2,6 +2,7 @@
   "name": "echo-subprocess",
   "description": "Deterministic subprocess echo fixture profile",
   "plugin_manifests": [
+    "plugins/echo-producer.plugin.json",
     "plugins/echo-subprocess.plugin.json"
   ],
   "schema_files": [

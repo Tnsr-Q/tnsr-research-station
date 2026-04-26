@@ -1,22 +1,18 @@
 {
-  "id": "echo_subprocess",
+  "id": "echo_producer",
   "kind": "compute",
-  "transport": "subprocess",
+  "transport": "local",
   "version": "0.1.0",
-  "artifact_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "subscribes": [
-    "echo.input"
-  ],
-  "publishes": [
-    "echo.output"
-  ],
+  "artifact_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "subscribes": [],
+  "publishes": ["echo.input"],
   "capabilities": [
-    "echo.roundtrip",
+    "echo.producer",
     "replay.safe"
   ],
   "capability_claims": [
     {
-      "name": "echo.roundtrip",
+      "name": "echo.producer",
       "enabled": true,
       "required": true,
       "deterministic": true,
@@ -30,13 +26,12 @@
     }
   ],
   "transport_config": {
-    "command": "python3",
-    "args": [
-      "fixtures/sidecars/echo_jsonl.py"
-    ],
-    "working_dir": "..",
+    "endpoint": null,
+    "command": null,
+    "args": [],
+    "working_dir": null,
     "env_allowlist": [],
     "inherit_env": false,
-    "timeout_ms": 500
+    "timeout_ms": null
   }
 }
