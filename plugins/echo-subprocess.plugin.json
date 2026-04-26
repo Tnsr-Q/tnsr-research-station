@@ -37,6 +37,8 @@
     "working_dir": "..",
     "env_allowlist": [],
     "inherit_env": false,
-    "timeout_ms": 500
+    "timeout_ms": 500,
+    "sidecar_executable_hash": "sha256:b3c011c507ec354b4106451977eec215a145634bd6ef1655e717e50529c42bbc",
+    "sidecar_args_hash": "sha256:53f8cb1193e814903026b634fdc3e792bb0a5f79a115848ad01107b635e8a7bf"
   }
 }

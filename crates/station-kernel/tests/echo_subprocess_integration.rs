@@ -147,6 +147,8 @@ fn producer_to_subprocess_round_trip_is_replayable_without_self_publish_input() 
         send_attempted.payload["policy_event_id"],
         admitted_input.policy_event_id()
     );
+    assert!(send_attempted.payload["event_hash"].as_str().is_some());
+    assert!(send_attempted.payload["payload_hash"].as_str().is_some());
 
     let send_succeeded = events
         .iter()

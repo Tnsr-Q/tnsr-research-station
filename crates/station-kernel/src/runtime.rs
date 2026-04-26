@@ -1,8 +1,11 @@
 use std::path::{Component, Path, PathBuf};
+use std::{collections::HashMap, fs};
 
 use artifact_ledger::ArtifactRecordRequest;
+use hex::encode as hex_encode;
 use runtime_core::{EventEnvelope, PublishReport};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use station_run::{RunManifest, RunStatus};
 use station_supervisor::{PluginRuntimeState, SupervisorError};
 use station_transport::{
@@ -130,7 +133,7 @@ impl KernelRuntime {
             &self.context.profile_dir,
         )?;
 
-        let transport_config = TransportConfig {
+        let mut transport_config = TransportConfig {
             id: format!("plugin:{plugin_id}"),
             kind: factory_transport_kind(&manifest.transport),
             endpoint: manifest.transport_config.endpoint.clone(),
@@ -141,6 +144,88 @@ impl KernelRuntime {
             inherit_env: manifest.transport_config.inherit_env,
             timeout_ms: manifest.transport_config.timeout_ms,
         };
+        if manifest.transport == ManifestTransportKind::Subprocess {
+            let command = match manifest.transport_config.command.as_deref() {
+                Some(command) => command,
+                None => {
+                    let reason = "missing subprocess command";
+                    self.record_runtime_denied(plugin_id, "Starting", "MissingCommand", reason)?;
+                    self.record_transport_failed(
+                        plugin_id,
+                        "start",
+                        transport_config.id.as_str(),
+                        reason,
+                    )?;
+                    self.transition_plugin_failed(plugin_id)?;
+                    return Err(KernelError::PluginRegistration(reason.to_string()));
+                }
+            };
+            let expected_executable_hash =
+                match manifest.transport_config.sidecar_executable_hash.as_deref() {
+                    Some(hash) => hash,
+                    None => {
+                        let reason = "missing sidecar_executable_hash for subprocess transport";
+                        self.record_runtime_denied(
+                            plugin_id,
+                            "Starting",
+                            "MissingExecutableHash",
+                            reason,
+                        )?;
+                        self.record_transport_failed(
+                            plugin_id,
+                            "start",
+                            transport_config.id.as_str(),
+                            reason,
+                        )?;
+                        self.transition_plugin_failed(plugin_id)?;
+                        return Err(KernelError::PluginRegistration(reason.to_string()));
+                    }
+                };
+            let resolved_command = match resolve_command_target(command) {
+                Ok(path) => path,
+                Err(err) => {
+                    let reason = err.to_string();
+                    self.record_runtime_denied(
+                        plugin_id,
+                        "Starting",
+                        "CommandResolutionFailed",
+                        reason.as_str(),
+                    )?;
+                    self.record_transport_failed(
+                        plugin_id,
+                        "start",
+                        transport_config.id.as_str(),
+                        reason.as_str(),
+                    )?;
+                    self.transition_plugin_failed(plugin_id)?;
+                    return Err(err);
+                }
+            };
+            let actual_executable_hash = sha256_urn_bytes(&fs::read(&resolved_command)?);
+            transport_config.command = Some(resolved_command.to_string_lossy().to_string());
+            if actual_executable_hash != expected_executable_hash {
+                let reason = format!(
+                    "sidecar executable hash mismatch for {}: expected {}, got {}",
+                    resolved_command.display(),
+                    expected_executable_hash,
+                    actual_executable_hash
+                );
+                self.record_runtime_denied(
+                    plugin_id,
+                    "Starting",
+                    "ExecutableHashMismatch",
+                    reason.as_str(),
+                )?;
+                self.record_transport_failed(
+                    plugin_id,
+                    "start",
+                    transport_config.id.as_str(),
+                    reason.as_str(),
+                )?;
+                self.transition_plugin_failed(plugin_id)?;
+                return Err(KernelError::PluginRegistration(reason));
+            }
+        }
 
         let mut transport = match build_transport(&transport_config) {
             Ok(transport) => transport,
@@ -263,7 +348,13 @@ impl KernelRuntime {
             .expect("transport existence checked")
             .id()
             .to_string();
-        let event = admitted.to_envelope_with_policy_event_id();
+        let mut event = admitted.to_envelope_with_policy_event_id();
+        if let Some(payload) = event.payload.as_object_mut() {
+            payload.insert(
+                "request_event_id".to_string(),
+                serde_json::Value::String(event.event_id.clone()),
+            );
+        }
 
         self.record_transport_send_evidence(
             "transport.runtime.send_attempted",
@@ -287,8 +378,10 @@ impl KernelRuntime {
         }
 
         self.context
-            .last_sent_by_plugin
-            .insert(plugin_id.to_string(), event.clone());
+            .inflight_by_plugin
+            .entry(plugin_id.to_string())
+            .or_insert_with(HashMap::new)
+            .insert(event.event_id.clone(), event.clone());
 
         self.record_transport_send_evidence(
             "transport.runtime.send_succeeded",
@@ -435,6 +528,8 @@ impl KernelRuntime {
                 "transport_id": transport_id,
                 "trace_id": event.trace_id,
                 "policy_event_id": policy_event_id,
+                "event_hash": sha256_urn_bytes(&serde_json::to_vec(event)?),
+                "payload_hash": sha256_urn_bytes(&serde_json::to_vec(&event.payload)?),
             }),
         );
         self.context.replay.append_record(&evidence)?;
@@ -468,15 +563,62 @@ impl KernelRuntime {
             return Ok(None);
         }
 
-        let parent = self.context.last_sent_by_plugin.get(plugin_id).cloned();
+        let request_event_id = match candidate
+            .payload
+            .get("request_event_id")
+            .and_then(serde_json::Value::as_str)
+        {
+            Some(request_event_id) if !request_event_id.is_empty() => request_event_id,
+            _ => {
+                let reason = "candidate payload missing request_event_id correlation key";
+                self.record_runtime_denied(
+                    plugin_id,
+                    "CandidateCanonicalization",
+                    "MissingCorrelationKey",
+                    reason,
+                )?;
+                let transport_id = format!("plugin:{plugin_id}");
+                self.record_transport_failed(
+                    plugin_id,
+                    "candidate_canonicalization",
+                    &transport_id,
+                    reason,
+                )?;
+                return Ok(None);
+            }
+        };
+        let parent = self
+            .context
+            .inflight_by_plugin
+            .get(plugin_id)
+            .and_then(|inflight| inflight.get(request_event_id))
+            .cloned();
+        let Some(parent) = parent else {
+            let reason = format!(
+                "candidate request_event_id {} not found in inflight map",
+                request_event_id
+            );
+            self.record_runtime_denied(
+                plugin_id,
+                "CandidateCanonicalization",
+                "UnknownCorrelationKey",
+                reason.as_str(),
+            )?;
+            let transport_id = format!("plugin:{plugin_id}");
+            self.record_transport_failed(
+                plugin_id,
+                "candidate_canonicalization",
+                &transport_id,
+                reason,
+            )?;
+            return Ok(None);
+        };
 
         let mut canonical =
             EventEnvelope::new(self.run_id(), candidate.topic, plugin_id, candidate.payload);
 
-        if let Some(parent) = parent {
-            canonical.trace_id = parent.trace_id;
-            canonical.parent_id = Some(parent.event_id);
-        }
+        canonical.trace_id = parent.trace_id;
+        canonical.parent_id = Some(parent.event_id);
 
         canonical.policy_event_id = None;
         canonical.artifact_hash = None;
@@ -540,6 +682,29 @@ fn normalize_path(path: &Path) -> Result<PathBuf, String> {
 
 fn canonicalize_or_normalize(path: &Path) -> Result<PathBuf, String> {
     std::fs::canonicalize(path).or_else(|_| normalize_path(path))
+}
+
+fn resolve_command_target(command: &str) -> Result<PathBuf, KernelError> {
+    let command_path = Path::new(command);
+    if command_path.is_absolute() || command.contains(std::path::MAIN_SEPARATOR) {
+        return Ok(std::fs::canonicalize(command_path)?);
+    }
+
+    let path_var = std::env::var_os("PATH")
+        .ok_or_else(|| KernelError::PluginRegistration("PATH is not set".into()))?;
+    for base in std::env::split_paths(&path_var) {
+        let candidate = base.join(command);
+        if candidate.is_file() {
+            return Ok(std::fs::canonicalize(candidate)?);
+        }
+    }
+    Err(KernelError::PluginRegistration(format!(
+        "command not found on PATH: {command}"
+    )))
+}
+
+fn sha256_urn_bytes(bytes: &[u8]) -> String {
+    format!("sha256:{}", hex_encode(Sha256::digest(bytes)))
 }
 
 fn resolve_bounded_working_dir(
@@ -776,6 +941,13 @@ mod tests {
             .replay
             .append_record(&admitted_event)
             .expect("append admitted event");
+    }
+
+    #[cfg(all(feature = "subprocess", unix))]
+    fn executable_hash(command: &str) -> String {
+        let command_path = resolve_command_target(command).expect("command should resolve");
+        let command_bytes = std::fs::read(command_path).expect("command should be readable");
+        sha256_urn_bytes(&command_bytes)
     }
 
     #[cfg(all(feature = "subprocess", unix))]
@@ -1482,15 +1654,14 @@ mod tests {
         );
 
         let result = runtime.start_plugin("test_subprocess_no_command");
-        assert!(matches!(result, Err(KernelError::Transport(_))));
+        assert!(matches!(result, Err(KernelError::PluginRegistration(_))));
 
         let events = JsonlReplayLog::read_all_events(runtime.context.events_path.clone())
             .expect("events should be readable");
         assert!(events.iter().any(|event| {
             event.topic == "transport.runtime.failed"
                 && event.payload["plugin_id"] == "test_subprocess_no_command"
-                && event.payload["reason"]
-                    == "transport error: subprocess transport requires command"
+                && event.payload["reason"] == "missing subprocess command"
         }));
     }
 
@@ -1516,6 +1687,7 @@ mod tests {
                 capability_claims: vec![],
                 transport_config: PluginTransportConfig {
                     command: Some("/bin/cat".to_string()),
+                    sidecar_executable_hash: Some(executable_hash("/bin/cat")),
                     working_dir: Some("../../../../../../".to_string()),
                     ..PluginTransportConfig::default()
                 },
@@ -1546,6 +1718,7 @@ mod tests {
             capability_claims: vec![],
             transport_config: PluginTransportConfig {
                 command: Some("/bin/cat".to_string()),
+                sidecar_executable_hash: Some(executable_hash("/bin/cat")),
                 timeout_ms: Some(50),
                 ..PluginTransportConfig::default()
             },
@@ -1583,6 +1756,7 @@ mod tests {
                 capability_claims: vec![],
                 transport_config: PluginTransportConfig {
                     command: Some("/bin/sh".to_string()),
+                    sidecar_executable_hash: Some(executable_hash("/bin/sh")),
                     args: vec![
                         "-lc".to_string(),
                         "echo 'stderr-line' 1>&2; sleep 0.1".to_string(),
@@ -1648,6 +1822,7 @@ mod tests {
                 capability_claims: vec![],
                 transport_config: PluginTransportConfig {
                     command: Some("/bin/cat".to_string()),
+                    sidecar_executable_hash: Some(executable_hash("/bin/cat")),
                     ..PluginTransportConfig::default()
                 },
             },
@@ -1704,6 +1879,7 @@ mod tests {
                 capability_claims: vec![],
                 transport_config: PluginTransportConfig {
                     command: Some("/bin/cat".to_string()),
+                    sidecar_executable_hash: Some(executable_hash("/bin/cat")),
                     ..PluginTransportConfig::default()
                 },
             },
@@ -1755,6 +1931,7 @@ mod tests {
                 capability_claims: vec![],
                 transport_config: PluginTransportConfig {
                     command: Some("/bin/cat".to_string()),
+                    sidecar_executable_hash: Some(executable_hash("/bin/cat")),
                     ..PluginTransportConfig::default()
                 },
             },
@@ -1810,9 +1987,10 @@ mod tests {
                 capability_claims: vec![],
                 transport_config: PluginTransportConfig {
                     command: Some("python3".to_string()),
+                    sidecar_executable_hash: Some(executable_hash("python3")),
                     args: vec![
                         "-c".to_string(),
-                        "import json,sys; [print(json.dumps({'version':'tnsr.event.v1','event_id':'evt-forged','trace_id':'evil-trace','parent_id':'evil-parent','session_id':'evil-run','topic':'quantum.state','source':'test_subprocess_canonicalized','policy_event_id':'forged-policy','created_at_ms':1,'payload':{'state_dim':1,'collapse_ratio':0.5,'euler_characteristic':1},'input_hash':'forged-input','artifact_hash':'sha256:bad...','schema_hash':'sha256:bad...','plugin_hash':'sha256:forged'}), flush=True) for _ in sys.stdin]".to_string(),
+                        "import json,sys\nfor line in sys.stdin:\n e=json.loads(line)\n print(json.dumps({'version':'tnsr.event.v1','event_id':'evt-forged','trace_id':'evil-trace','parent_id':'evil-parent','session_id':'evil-run','topic':'quantum.state','source':'test_subprocess_canonicalized','policy_event_id':'forged-policy','created_at_ms':1,'payload':{'state_dim':1,'collapse_ratio':0.5,'euler_characteristic':1,'request_event_id':e.get('event_id')},'input_hash':'forged-input','artifact_hash':'sha256:bad...','schema_hash':'sha256:bad...','plugin_hash':'sha256:forged'}), flush=True)".to_string(),
                     ],
                     ..PluginTransportConfig::default()
                 },
@@ -1903,9 +2081,10 @@ mod tests {
                 capability_claims: vec![],
                 transport_config: PluginTransportConfig {
                     command: Some("python3".to_string()),
+                    sidecar_executable_hash: Some(executable_hash("python3")),
                     args: vec![
                         "-c".to_string(),
-                        "import json,sys; [print(json.dumps({'version':'tnsr.event.v1','event_id':'evt-forged','trace_id':'trace-forged','parent_id':None,'session_id':'run-forged','topic':'quantum.state','source':'forged_source','policy_event_id':'policy-forged','created_at_ms':1,'payload':{'state_dim':1,'collapse_ratio':0.5,'euler_characteristic':1},'input_hash':None,'artifact_hash':'sha256:forged','schema_hash':'sha256:forged','plugin_hash':'sha256:forged'}), flush=True) for _ in sys.stdin]".to_string(),
+                        "import json,sys\nfor line in sys.stdin:\n e=json.loads(line)\n print(json.dumps({'version':'tnsr.event.v1','event_id':'evt-forged','trace_id':'trace-forged','parent_id':None,'session_id':'run-forged','topic':'quantum.state','source':'forged_source','policy_event_id':'policy-forged','created_at_ms':1,'payload':{'state_dim':1,'collapse_ratio':0.5,'euler_characteristic':1,'request_event_id':e.get('event_id')},'input_hash':None,'artifact_hash':'sha256:forged','schema_hash':'sha256:forged','plugin_hash':'sha256:forged'}), flush=True)".to_string(),
                     ],
                     ..PluginTransportConfig::default()
                 },
@@ -1974,6 +2153,7 @@ mod tests {
                 capability_claims: vec![],
                 transport_config: PluginTransportConfig {
                     command: Some("/bin/sleep".to_string()),
+                    sidecar_executable_hash: Some(executable_hash("/bin/sleep")),
                     args: vec!["5".to_string()],
                     timeout_ms: Some(10),
                     ..PluginTransportConfig::default()

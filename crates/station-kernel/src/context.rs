@@ -27,7 +27,7 @@ pub struct KernelContext {
     pub supervisor: StationSupervisor,
     pub replay: JsonlReplayLog,
     pub transports: HashMap<String, Box<dyn Transport>>,
-    pub last_sent_by_plugin: HashMap<String, EventEnvelope>,
+    pub inflight_by_plugin: HashMap<String, HashMap<String, EventEnvelope>>,
 }
 
 impl KernelContext {
@@ -59,7 +59,7 @@ impl KernelContext {
             supervisor,
             replay: JsonlReplayLog::open(events_path)?,
             transports: HashMap::new(),
-            last_sent_by_plugin: HashMap::new(),
+            inflight_by_plugin: HashMap::new(),
         })
     }
 

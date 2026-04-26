@@ -43,6 +43,7 @@ pub struct PluginSummary {
     pub transport: String,
     pub version: String,
     pub artifact_hash: String,
+    pub sidecar_args_hash: Option<String>,
     pub publishes: Vec<String>,
     pub subscribes: Vec<String>,
     pub capabilities: Vec<String>,

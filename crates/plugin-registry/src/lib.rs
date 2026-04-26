@@ -90,6 +90,8 @@ pub struct PluginTransportConfig {
     pub command: Option<String>,
     #[serde(default)]
     pub args: Vec<String>,
+    pub sidecar_executable_hash: Option<String>,
+    pub sidecar_args_hash: Option<String>,
     pub working_dir: Option<String>,
     #[serde(default)]
     pub env_allowlist: Vec<String>,

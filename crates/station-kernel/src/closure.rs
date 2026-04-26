@@ -74,6 +74,7 @@ fn build_plugin_summaries(registry: &PluginRegistry) -> Vec<PluginSummary> {
             transport: transport_kind_wire(&m.transport).into(),
             version: m.version.clone(),
             artifact_hash: m.artifact_hash.clone(),
+            sidecar_args_hash: m.transport_config.sidecar_args_hash.clone(),
             publishes: m.publishes.clone(),
             subscribes: m.subscribes.clone(),
             capabilities: m.capabilities.clone(),
