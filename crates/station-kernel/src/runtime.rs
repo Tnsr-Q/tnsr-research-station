@@ -286,6 +286,10 @@ impl KernelRuntime {
             return Err(KernelError::Transport(err));
         }
 
+        self.context
+            .last_sent_by_plugin
+            .insert(plugin_id.to_string(), event.clone());
+
         self.record_transport_send_evidence(
             "transport.runtime.send_succeeded",
             plugin_id,
@@ -441,7 +445,7 @@ impl KernelRuntime {
         &mut self,
         plugin_id: &str,
         plugin_artifact_hash: &str,
-        mut candidate: EventEnvelope,
+        candidate: EventEnvelope,
     ) -> Result<Option<EventEnvelope>, KernelError> {
         if candidate.source != plugin_id {
             let reason = format!(
@@ -464,22 +468,23 @@ impl KernelRuntime {
             return Ok(None);
         }
 
-        let canonical = EventEnvelope::new(
-            self.run_id(),
-            candidate.topic.clone(),
-            plugin_id,
-            candidate.payload.clone(),
-        );
-        candidate.version = canonical.version;
-        candidate.event_id = canonical.event_id;
-        candidate.session_id = canonical.session_id;
-        candidate.created_at_ms = canonical.created_at_ms;
-        candidate.policy_event_id = None;
-        candidate.artifact_hash = None;
-        candidate.schema_hash = None;
-        candidate.plugin_hash = Some(plugin_artifact_hash.to_string());
+        let parent = self.context.last_sent_by_plugin.get(plugin_id).cloned();
 
-        Ok(Some(candidate))
+        let mut canonical =
+            EventEnvelope::new(self.run_id(), candidate.topic, plugin_id, candidate.payload);
+
+        if let Some(parent) = parent {
+            canonical.trace_id = parent.trace_id;
+            canonical.parent_id = Some(parent.event_id);
+        }
+
+        canonical.policy_event_id = None;
+        canonical.artifact_hash = None;
+        canonical.schema_hash = None;
+        canonical.input_hash = None;
+        canonical.plugin_hash = Some(plugin_artifact_hash.to_string());
+
+        Ok(Some(canonical))
     }
 }
 
@@ -1807,7 +1812,7 @@ mod tests {
                     command: Some("python3".to_string()),
                     args: vec![
                         "-c".to_string(),
-                        "import json,sys; [print(json.dumps({'version':'tnsr.event.v1','event_id':'evt-forged','trace_id':'trace-forged','parent_id':None,'session_id':'run-forged','topic':'quantum.state','source':'test_subprocess_canonicalized','policy_event_id':'policy-forged','created_at_ms':1,'payload':{'state_dim':1,'collapse_ratio':0.5,'euler_characteristic':1},'input_hash':None,'artifact_hash':'sha256:forged','schema_hash':'sha256:forged','plugin_hash':'sha256:forged'}), flush=True) for _ in sys.stdin]".to_string(),
+                        "import json,sys; [print(json.dumps({'version':'tnsr.event.v1','event_id':'evt-forged','trace_id':'evil-trace','parent_id':'evil-parent','session_id':'evil-run','topic':'quantum.state','source':'test_subprocess_canonicalized','policy_event_id':'forged-policy','created_at_ms':1,'payload':{'state_dim':1,'collapse_ratio':0.5,'euler_characteristic':1},'input_hash':'forged-input','artifact_hash':'sha256:bad...','schema_hash':'sha256:bad...','plugin_hash':'sha256:forged'}), flush=True) for _ in sys.stdin]".to_string(),
                     ],
                     ..PluginTransportConfig::default()
                 },
@@ -1857,9 +1862,16 @@ mod tests {
             })
             .expect("canonicalized subprocess output should exist");
         assert_eq!(output.session_id, runtime.run_id());
+        assert_eq!(output.trace_id, admitted_input.trace_id());
+        assert_eq!(output.parent_id.as_deref(), Some(admitted_input.event_id()));
         assert!(output.policy_event_id.is_some());
         assert_ne!(output.event_id, "evt-forged");
         assert_ne!(output.created_at_ms, 1);
+        assert_ne!(output.trace_id, "evil-trace");
+        assert_ne!(output.parent_id.as_deref(), Some("evil-parent"));
+        assert_ne!(output.artifact_hash.as_deref(), Some("sha256:bad..."));
+        assert_ne!(output.schema_hash.as_deref(), Some("sha256:bad..."));
+        assert_ne!(output.input_hash.as_deref(), Some("forged-input"));
         assert_eq!(
             output.plugin_hash.as_deref(),
             Some("sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
