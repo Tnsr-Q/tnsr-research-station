@@ -161,6 +161,7 @@ name = "bridge_gpui"
 version = "0.1.0"
 dependencies = [
  "runtime_core",
+ "serde_json",
 ]
 
 [[package]]
