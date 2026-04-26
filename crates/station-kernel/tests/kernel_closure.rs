@@ -63,6 +63,9 @@ fn complete_default_run() -> (PathBuf, PathBuf, PathBuf) {
     let mut runtime = KernelRuntime::from_profile_path(default_profile_path()).expect("runtime");
     runtime.register_plugins().expect("register plugins");
     runtime.register_schemas().expect("register schemas");
+    runtime
+        .start_plugin("adapter_quantum")
+        .expect("start adapter_quantum");
 
     let event = quantum_state_event(runtime.run_id());
     let admitted = runtime
@@ -135,6 +138,9 @@ fn unauthorized_topic_event_seals_failed_manifest_with_policy_denial() {
     let mut runtime = KernelRuntime::from_profile_path(default_profile_path()).expect("runtime");
     runtime.register_plugins().expect("register plugins");
     runtime.register_schemas().expect("register schemas");
+    runtime
+        .start_plugin("adapter_quantum")
+        .expect("start adapter_quantum");
 
     let event = EventEnvelope::new(
         runtime.run_id(),
@@ -167,6 +173,9 @@ fn wrong_schema_type_seals_failed_manifest_with_policy_denial() {
     let mut runtime = KernelRuntime::from_profile_path(default_profile_path()).expect("runtime");
     runtime.register_plugins().expect("register plugins");
     runtime.register_schemas().expect("register schemas");
+    runtime
+        .start_plugin("adapter_quantum")
+        .expect("start adapter_quantum");
 
     let event = EventEnvelope::new(
         runtime.run_id(),
@@ -250,9 +259,16 @@ fn plugin_requiring_network_is_rejected_when_profile_forbids_network() {
 
 #[test]
 fn plugin_requiring_gpu_is_rejected_when_profile_forbids_gpu() {
-    let quantum_manifest =
+    let mut quantum_manifest =
         load_plugin_manifest_json(repo_root().join("plugins/quantum-hybrid.plugin.json"))
             .expect("load quantum manifest");
+    if let Some(claim) = quantum_manifest
+        .capability_claims
+        .iter_mut()
+        .find(|claim| claim.name == "simulation.hypergrid")
+    {
+        claim.enabled = true;
+    }
     let mut supervisor = StationSupervisor::new_with_permissions(
         "gpu-denied",
         RuntimePermissions {

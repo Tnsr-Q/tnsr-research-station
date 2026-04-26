@@ -28,7 +28,7 @@
     },
     {
       "name": "simulation.hypergrid",
-      "enabled": true,
+      "enabled": false,
       "deterministic": true,
       "replay_safe": true,
       "projection_only": false,
