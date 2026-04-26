@@ -758,26 +758,29 @@ fn sidecar_args_hash(args: &[String], working_dir: Option<&Path>) -> Result<Stri
 
 fn canonicalize_sidecar_arg(arg: &str, working_dir: Option<&Path>) -> Result<Value, KernelError> {
     let arg_path = Path::new(arg);
-    let resolved_candidate = if arg_path.is_absolute() {
+    let file_candidate = if arg_path.is_absolute() {
         Some(arg_path.to_path_buf())
     } else {
         working_dir.map(|dir| dir.join(arg_path))
     };
-    let resolved = resolved_candidate
-        .and_then(|candidate| std::fs::canonicalize(&candidate).ok())
-        .unwrap_or_else(|| arg_path.to_path_buf());
 
-    let file_hash = if resolved.is_file() {
-        Some(sha256_urn_bytes(&std::fs::read(&resolved)?))
-    } else {
-        None
+    let file_hash = match file_candidate
+        .as_ref()
+        .and_then(|candidate| std::fs::canonicalize(candidate).ok())
+    {
+        Some(path) if path.is_file() => Some(sha256_urn_bytes(&std::fs::read(path)?)),
+        _ => None,
     };
 
     Ok(json!({
         "raw": arg,
-        "resolved": resolved.to_string_lossy().to_string(),
+        "normalized": normalize_arg_for_hash(arg),
         "file_hash": file_hash
     }))
+}
+
+fn normalize_arg_for_hash(arg: &str) -> String {
+    arg.replace('\\', "/")
 }
 
 fn resolve_bounded_working_dir(
@@ -828,7 +831,7 @@ fn resolve_bounded_working_dir(
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use adapter_quantum::quantum_state_event;
     use plugin_registry::{
@@ -1030,6 +1033,63 @@ mod tests {
             .map(|value| (*value).to_string())
             .collect::<Vec<_>>();
         sidecar_args_hash(&args, working_dir).expect("args hash should compute")
+    }
+
+    #[test]
+    fn sidecar_args_hash_omits_resolved_absolute_paths() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "sidecar-args-hash-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(temp_root.join("fixtures/sidecars"))
+            .expect("temp fixtures directory should create");
+        let script = temp_root.join("fixtures/sidecars/echo_jsonl.py");
+        fs::write(&script, b"print('hash me')\n").expect("script should write");
+
+        let canonical =
+            canonicalize_sidecar_arg("fixtures/sidecars/echo_jsonl.py", Some(&temp_root))
+                .expect("canonical arg should build");
+        assert!(canonical.get("resolved").is_none());
+        assert_eq!(
+            canonical["normalized"],
+            Value::String("fixtures/sidecars/echo_jsonl.py".to_string())
+        );
+        let canonical_text = canonical.to_string();
+        assert!(!canonical_text.contains(&temp_root.to_string_lossy().to_string()));
+
+        fs::remove_dir_all(temp_root).expect("temp root should remove");
+    }
+
+    #[test]
+    fn sidecar_args_hash_is_checkout_path_independent_for_relative_args() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("unix epoch")
+            .as_nanos();
+        let root_a = std::env::temp_dir().join(format!("sidecar-args-a-{unique}"));
+        let root_b = std::env::temp_dir().join(format!("sidecar-args-b-{unique}"));
+        let relative = Path::new("fixtures/sidecars/echo_jsonl.py");
+        let script_a = root_a.join(relative);
+        let script_b = root_b.join(relative);
+
+        fs::create_dir_all(script_a.parent().expect("script path should have parent"))
+            .expect("root A directory should create");
+        fs::create_dir_all(script_b.parent().expect("script path should have parent"))
+            .expect("root B directory should create");
+        let bytes = b"print('same bytes')\n";
+        fs::write(&script_a, bytes).expect("script A should write");
+        fs::write(&script_b, bytes).expect("script B should write");
+
+        let args = vec![relative.to_string_lossy().to_string()];
+        let hash_a = sidecar_args_hash(&args, Some(&root_a)).expect("hash A should compute");
+        let hash_b = sidecar_args_hash(&args, Some(&root_b)).expect("hash B should compute");
+        assert_eq!(hash_a, hash_b);
+
+        fs::remove_dir_all(root_a).expect("root A should remove");
+        fs::remove_dir_all(root_b).expect("root B should remove");
     }
 
     #[cfg(all(feature = "subprocess", unix))]

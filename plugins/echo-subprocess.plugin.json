@@ -39,6 +39,6 @@
     "inherit_env": false,
     "timeout_ms": 500,
     "sidecar_executable_hash": "sha256:b3c011c507ec354b4106451977eec215a145634bd6ef1655e717e50529c42bbc",
-    "sidecar_args_hash": "sha256:37b025f5eabbb67bbf869b6fe4f7d441a9fd30a6dfe62b346b2e5bc3cf628c6f"
+    "sidecar_args_hash": "sha256:156c55cd64cd72f26390abfeb9e510ae5aa9a38aba2759fec7320d615ab344df"
   }
 }
