@@ -1,0 +1,77 @@
+{
+  "run_id": "run-01KQ3R5X1M21YYHW1KM5CSJ424",
+  "profile_name": "default",
+  "status": "failed",
+  "event_log_path": "events.jsonl",
+  "manifest_path": "manifest.json",
+  "started_at_ms": 1777168741428,
+  "completed_at_ms": 1777168741428,
+  "records_verified": 1,
+  "last_record_hash": "1e472d367ba252b0cb07df5fd2639bd6cb1e021712f8ce9a7beb97580a2003a2",
+  "replay_valid": true,
+  "verification_error": null,
+  "failure_reason": "plugin not registered: adapter_quantum",
+  "plugin_count": 0,
+  "schema_count": 3,
+  "artifact_count": 0,
+  "plugins": [],
+  "schemas": [
+    {
+      "id": "tnsr.plugin.capability.v1",
+      "topic": "plugin.capability",
+      "version": "1",
+      "schema_hash": "sha256:703b34b828a459ecb950c11898e6bc5aebf6710a395ba3fbec1465fecbe5652d",
+      "required_fields": [
+        [
+          "enabled",
+          "Boolean"
+        ],
+        [
+          "deterministic",
+          "Boolean"
+        ],
+        [
+          "claims",
+          "Object"
+        ],
+        [
+          "supported_topics",
+          "Array"
+        ]
+      ]
+    },
+    {
+      "id": "tnsr.quantum.state.v1",
+      "topic": "quantum.state",
+      "version": "1",
+      "schema_hash": "sha256:4dc1d05cfa389a46fcad3247012fd8f9f26f9d6da05436f70b5e05a88f5f2b4b",
+      "required_fields": [
+        [
+          "state_dim",
+          "Integer"
+        ],
+        [
+          "collapse_ratio",
+          "Number"
+        ],
+        [
+          "euler_characteristic",
+          "Integer"
+        ]
+      ]
+    },
+    {
+      "id": "tnsr.rag.result.v1",
+      "topic": "rag.result",
+      "version": "1",
+      "schema_hash": "sha256:0431a7bf7d7d32b744763f95fb92e332e293627e4d1c127724948f6242be59ad",
+      "required_fields": [
+        [
+          "message",
+          "String"
+        ]
+      ]
+    }
+  ],
+  "artifacts": []
+}

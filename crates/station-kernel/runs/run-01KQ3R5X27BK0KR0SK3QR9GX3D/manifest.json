@@ -1,0 +1,172 @@
+{
+  "run_id": "run-01KQ3R5X27BK0KR0SK3QR9GX3D",
+  "profile_name": "default",
+  "status": "failed",
+  "event_log_path": "events.jsonl",
+  "manifest_path": "manifest.json",
+  "started_at_ms": 1777168741447,
+  "completed_at_ms": 1777168741449,
+  "records_verified": 5,
+  "last_record_hash": "91f4523a34cb794348ac11093b1e5a6d5f559c2b4bdbd0991d496c713a1fdaa8",
+  "replay_valid": true,
+  "verification_error": null,
+  "failure_reason": "plugin not registered: unknown_plugin",
+  "plugin_count": 2,
+  "schema_count": 3,
+  "artifact_count": 0,
+  "plugins": [
+    {
+      "id": "adapter_quantum",
+      "kind": "compute",
+      "transport": "local",
+      "version": "0.1.0",
+      "artifact_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "publishes": [
+        "quantum.state"
+      ],
+      "subscribes": [
+        "quantum.analyze"
+      ],
+      "capabilities": [
+        "quantum.state.emit",
+        "simulation.hypergrid",
+        "artifact.write",
+        "replay.safe"
+      ],
+      "capability_claims": [
+        {
+          "name": "quantum.state.emit",
+          "enabled": true,
+          "required": true,
+          "deterministic": true,
+          "replay_safe": true,
+          "projection_only": false,
+          "emits_artifacts": true,
+          "requires_network": false,
+          "requires_filesystem": false,
+          "requires_gpu": false,
+          "max_runtime_ms": 1000
+        },
+        {
+          "name": "simulation.hypergrid",
+          "enabled": false,
+          "required": false,
+          "deterministic": true,
+          "replay_safe": true,
+          "projection_only": false,
+          "emits_artifacts": false,
+          "requires_network": false,
+          "requires_filesystem": false,
+          "requires_gpu": true,
+          "max_runtime_ms": null
+        }
+      ]
+    },
+    {
+      "id": "adapter_rag",
+      "kind": "semantic",
+      "transport": "local",
+      "version": "0.1.0",
+      "artifact_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "publishes": [
+        "rag.result"
+      ],
+      "subscribes": [
+        "quantum.state"
+      ],
+      "capabilities": [
+        "rag.result.emit",
+        "projection.browser",
+        "artifact.write",
+        "replay.safe"
+      ],
+      "capability_claims": [
+        {
+          "name": "rag.result.emit",
+          "enabled": true,
+          "required": true,
+          "deterministic": false,
+          "replay_safe": true,
+          "projection_only": false,
+          "emits_artifacts": true,
+          "requires_network": true,
+          "requires_filesystem": false,
+          "requires_gpu": false,
+          "max_runtime_ms": 4000
+        },
+        {
+          "name": "projection.browser",
+          "enabled": true,
+          "required": false,
+          "deterministic": false,
+          "replay_safe": true,
+          "projection_only": true,
+          "emits_artifacts": false,
+          "requires_network": false,
+          "requires_filesystem": false,
+          "requires_gpu": false,
+          "max_runtime_ms": null
+        }
+      ]
+    }
+  ],
+  "schemas": [
+    {
+      "id": "tnsr.plugin.capability.v1",
+      "topic": "plugin.capability",
+      "version": "1",
+      "schema_hash": "sha256:703b34b828a459ecb950c11898e6bc5aebf6710a395ba3fbec1465fecbe5652d",
+      "required_fields": [
+        [
+          "enabled",
+          "Boolean"
+        ],
+        [
+          "deterministic",
+          "Boolean"
+        ],
+        [
+          "claims",
+          "Object"
+        ],
+        [
+          "supported_topics",
+          "Array"
+        ]
+      ]
+    },
+    {
+      "id": "tnsr.quantum.state.v1",
+      "topic": "quantum.state",
+      "version": "1",
+      "schema_hash": "sha256:4dc1d05cfa389a46fcad3247012fd8f9f26f9d6da05436f70b5e05a88f5f2b4b",
+      "required_fields": [
+        [
+          "state_dim",
+          "Integer"
+        ],
+        [
+          "collapse_ratio",
+          "Number"
+        ],
+        [
+          "euler_characteristic",
+          "Integer"
+        ]
+      ]
+    },
+    {
+      "id": "tnsr.rag.result.v1",
+      "topic": "rag.result",
+      "version": "1",
+      "schema_hash": "sha256:0431a7bf7d7d32b744763f95fb92e332e293627e4d1c127724948f6242be59ad",
+      "required_fields": [
+        [
+          "message",
+          "String"
+        ]
+      ]
+    }
+  ],
+  "artifacts": []
+}
