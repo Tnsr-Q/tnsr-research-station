@@ -10,9 +10,9 @@ The central invariant is simple:
 
 ---
 
-## Current status
+## Current status (April 30, 2026)
 
-The current main branch supports:
+The current `main` branch supports:
 
 - declarative run profiles
 - plugin manifests with structured capability claims
@@ -167,6 +167,28 @@ admitted input event
 ```
 
 Stderr, parse failures, timeouts, non-zero exits, forced kills, and runtime denials are emitted as replayable evidence events.
+
+### Target architecture
+
+The kernel startup/closure path is intentionally strict:
+
+```text
+station-kernel
+  -> loads RunProfile
+  -> loads PluginManifest files
+  -> loads PayloadSchema definitions
+  -> initializes StationSupervisor
+  -> initializes PolicyEngine
+  -> initializes EventBus
+  -> initializes JsonlReplayLog
+  -> initializes ArtifactLedger
+  -> starts admitted transports
+  -> routes policy-admitted events
+  -> seals replay records
+  -> records artifact provenance
+  -> emits telemetry
+  -> writes RunManifest
+```
 
 ---
 
@@ -472,6 +494,21 @@ Reserved/disabled transport kinds:
 - `connectrpc`
 - `pyro5`
 - `ffi`
+
+### Future sidecar integration
+
+Future sidecars may attach through:
+
+- `local` (in-process)
+- `wasm` (WebAssembly modules)
+- `subprocess` (external processes)
+- `websocket` (WebSocket connections)
+- `grpc` (gRPC services)
+- `connectrpc` (Connect RPC services)
+- `pyro5` (Python remote objects)
+- `ffi` (foreign function interface)
+
+All sidecar paths share the same security boundary: they must never bypass `PluginRegistry`, `StationSupervisor`, `SchemaRegistry`, `PolicyEngine`, `JsonlReplayLog`, `ArtifactLedger`, or `RunManifest`.
 
 #### Subprocess behavior
 
@@ -787,7 +824,7 @@ fixtures/sidecars/echo_jsonl.py
 plugins/echo-subprocess.plugin.json
 schemas/echo-input.schema.json
 schemas/echo-output.schema.json
-profile/echo-subprocess.profile.json
+profiles/echo-subprocess.profile.json
 crates/station-kernel/tests/echo_subprocess_integration.rs
 ```
 
